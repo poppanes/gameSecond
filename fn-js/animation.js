@@ -54,13 +54,10 @@ function updatePendingFlips(dt) {
         if (pf.elapsed >= pf.delay) {
             // 执行翻转：改变格子状态
             const tile = map.tiles[pf.row][pf.col];
-            if (pf.toggle) {
-                tile.flipped = !tile.flipped;
-            } else {
-                tile.flipped = true;
-            }
             tile.color = pf.newColor;
             tile.borderColor = pf.newBorderColor;
+            // flipped 与颜色始终保持同步（修复怪物翻转造成的状态不一致）
+            tile.flipped = (pf.newColor !== map.cellColor);
             
             // 翻板执行时，仅玩家翻转 → 怪物进入硬直状态（不立即消失）
             if (pf.fromPlayer && typeof enemies !== 'undefined') {

@@ -175,35 +175,49 @@ class Map {
             return 'destroyed';
         }
         
-        // 条件C：目标位置有怪物（硬直中不算）→ 推动怪物到下一格
-        const enemyIdx = enemies.findIndex(e => e && e.alive === true && e.stunned <= 0 &&
+        // 条件C：目标位置有怪物（硬直中不算）
+        const enemiesOnCell = enemies.filter(e => e && e.alive === true && e.stunned <= 0 &&
             e.gridX === newCol && e.gridY === newRow);
-        if (enemyIdx >= 0) {
+        if (enemiesOnCell.length > 0) {
             const eNextCol = newCol + dx;
             const eNextRow = newRow + dy;
-            const e = enemies[enemyIdx];
+            const eOutOfBounds = eNextCol < 0 || eNextCol >= this.cols || eNextRow < 0 || eNextRow >= this.rows;
+            const eNextStone = !eOutOfBounds && this.stoneGrid[eNextRow][eNextCol];
+            const eNextHole = !eOutOfBounds && typeof isBlackHole === 'function' && isBlackHole(eNextCol, eNextRow);
             
-            // 怪物被推到地图外 → 怪物消失，箱子移动到位
-            if (eNextCol < 0 || eNextCol >= this.cols || eNextRow < 0 || eNextRow >= this.rows) {
+            // 推动方向是边界/石头/黑洞 → 目标格所有怪物死亡
+            if (eOutOfBounds || eNextStone || eNextHole) {
                 this.boxGrid[boxRow][boxCol] = false;
-                this.boxGrid[newRow][newCol] = true;
-                e.alive = false;
-                enemies.splice(enemyIdx, 1);
-                console.log(`[pushBox] → 箱子把怪物推出地图 (${newCol},${newRow}) 怪物消失`);
+                const newCorner = (newCol === 0 || newCol === this.cols - 1) &&
+                                   (newRow === 0 || newRow === this.rows - 1);
+                if (newCorner) {
+                    spawnItem(newCol, newRow, true);
+                    console.log(`[pushBox] → 推到角落(${newCol},${newRow})，箱子消失`);
+                } else {
+                    this.boxGrid[newRow][newCol] = true;
+                }
+                enemiesOnCell.forEach(e => { e.alive = false; });
+                console.log(`[pushBox] → 箱子把 [${enemiesOnCell.map(e=>e.name).join(',')}] 共${enemiesOnCell.length}只怪物推出地图外`);
                 return true;
             }
             
-            // 怪物在边界内：检测下一格是否可通行
-            const canPush = !this.stoneGrid[eNextRow][eNextCol] &&
-                !this.boxGrid[eNextRow][eNextCol] &&
-                this.tiles[eNextRow][eNextCol].type !== 'wall' &&
-                !enemies.some(other => other.alive &&
+            // 怪物在边界内：检测下一格是否可通行 → 推动到下一格
+            const e = enemiesOnCell[0];
+            const canPush = !this.boxGrid[eNextRow][eNextCol] &&
+                !enemies.some(other => other !== e && other.alive &&
                     other.gridX === eNextCol && other.gridY === eNextRow);
             if (canPush) {
                 this.boxGrid[boxRow][boxCol] = false;
                 this.boxGrid[newRow][newCol] = true;
                 e.pushTo(eNextCol, eNextRow);
-                console.log(`[pushBox] → 箱子推动怪物 (${newCol},${newRow}) → (${eNextCol},${eNextRow})`);
+                console.log(`[pushBox] → 箱子推动 ${e.name} (${newCol},${newRow}) → (${eNextCol},${eNextRow})`);
+                // 同一格有多余怪物 → 也推出（极端情况，保底处理）
+                if (enemiesOnCell.length > 1) {
+                    for (let i = 1; i < enemiesOnCell.length; i++) {
+                        enemiesOnCell[i].alive = false;
+                    }
+                    console.log(`[pushBox] → 同一格多余 ${enemiesOnCell.length - 1} 只怪物被推出`);
+                }
                 return true;
             }
             console.log(`[pushBox] → 怪物推不动，箱子也无法移动`);
@@ -214,23 +228,69 @@ class Map {
         if (this.stoneGrid[newRow][newCol]) return false;
         if (this.tiles[newRow][newCol].type === 'wall' || this.tiles[newRow][newCol].type === 'obstacle') return false;
         
-        // 移动箱子（推过的箱子，新位置继续豁免——必须推走或消失才能翻）
+        // 条件D：目标位置有玩家 → 推动玩家（可能推出地图致死）
+        if (typeof player !== 'undefined' && player.gridX === newCol && player.gridY === newRow) {
+            const pNextCol = newCol + dx;
+            const pNextRow = newRow + dy;
+            const pNextOutOfBounds = pNextCol < 0 || pNextCol >= this.cols || pNextRow < 0 || pNextRow >= this.rows;
+            const pNextStone = !pNextOutOfBounds && this.stoneGrid[pNextRow][pNextCol];
+            const pNextBox = !pNextOutOfBounds && this.boxGrid[pNextRow][pNextCol];
+            const pNextHole = !pNextOutOfBounds && typeof isBlackHole === 'function' && isBlackHole(pNextCol, pNextRow);
+            
+            // 移动箱子到玩家位置
+            this.boxGrid[boxRow][boxCol] = false;
+            this.boxGrid[newRow][newCol] = true;
+            
+            if (pNextOutOfBounds || pNextStone || pNextBox || pNextHole) {
+                // 玩家被推到边界/石头/箱子/黑洞 → 扣1条命
+                player.invTimer = 0;
+                player.takeDamage(1);
+                player.respawn();
+                console.log(`[pushBox] → 箱子把玩家推出 (${pNextCol},${pNextRow}) 玩家受伤,生命:${player.lives}`);
+                if (player.isDead()) {
+                    if (game) { game.gameOver = true; if (gameInput) gameInput.enabled = false; }
+                }
+            } else {
+                // 玩家被推到下一格（无伤害）
+                player.gridX = pNextCol;
+                player.gridY = pNextRow;
+                const pcx = OFFSET_X + pNextCol * CELL_SIZE + CELL_SIZE / 2;
+                const pcy = OFFSET_Y + pNextRow * CELL_SIZE + CELL_SIZE / 2;
+                player.pixelX = pcx - player.width / 2;
+                player.pixelY = pcy - player.height / 2;
+                player.targetPixelX = player.pixelX;
+                player.targetPixelY = player.pixelY;
+                player.isMoving = false;
+                console.log(`[pushBox] → 箱子推动玩家 (${newCol},${newRow}) → (${pNextCol},${pNextRow})`);
+            }
+            
+            // 统一角落检测：箱子到达角落也消失+掉落
+            const isCorner = (newCol === 0 || newCol === this.cols - 1) &&
+                             (newRow === 0 || newRow === this.rows - 1);
+            if (isCorner) {
+                this.boxGrid[newRow][newCol] = false;
+                spawnItem(newCol, newRow, true);
+                console.log(`[pushBox] → 到达角落(${newCol},${newRow})，箱子消失`);
+            } else {
+                this.boxNeverPushed.add(`${newCol},${newRow}`);
+            }
+            return true;
+        }
+        
+        // 移动箱子
         this.boxGrid[boxRow][boxCol] = false;
         this.boxGrid[newRow][newCol] = true;
-        this.boxNeverPushed.add(`${newCol},${newRow}`);
         
-        // 条件B：到达4个角落 → 箱子自动消失 → 掉落道具
-        // 角落: (0,0) (7,0) (0,6) (7,6)
+        // 条件B：到达4个角落 → 箱子自动消失 → 必定掉落道具
         const isCorner = (newCol === 0 || newCol === this.cols - 1) &&
                          (newRow === 0 || newRow === this.rows - 1);
         if (isCorner) {
-            console.log(`[pushBox] → 到达角落(${newCol},${newRow})，箱子自动消失`);
             this.boxGrid[newRow][newCol] = false;
-            spawnItem(newCol, newRow);
-            // 箱子消失，该格不再豁免
-            this.boxNeverPushed.delete(`${newCol},${newRow}`);
+            spawnItem(newCol, newRow, true);
+            console.log(`[pushBox] → 到达角落(${newCol},${newRow})，箱子消失`);
+        } else {
+            this.boxNeverPushed.add(`${newCol},${newRow}`);
         }
-        
         return true;
     }
     
@@ -264,15 +324,12 @@ class Map {
     flipTile(col, row) {
         if (col >= 0 && col < this.cols && row >= 0 && row < this.rows) {
             const tile = this.tiles[row][col];
-            tile.flipped = !tile.flipped;
-            if (tile.flipped) {
-                tile.color = this.flippedColor;
-                tile.borderColor = this.flippedBorderColor;
-            } else {
-                tile.color = this.cellColor;
-                tile.borderColor = this.borderColor;
-            }
-            return tile.flipped;
+            const isCurrentlyFlipped = tile.color !== this.cellColor;
+            const newFlipped = !isCurrentlyFlipped;
+            tile.color = newFlipped ? this.flippedColor : this.cellColor;
+            tile.borderColor = newFlipped ? this.flippedBorderColor : this.borderColor;
+            tile.flipped = newFlipped;  // 同步（兼容旧代码）
+            return newFlipped;
         }
         return false;
     }
@@ -295,7 +352,8 @@ class Map {
         // 左
         for (let c = col - 1; c >= 0; c--) {
             if (this.boxGrid[row][c] || this.stoneGrid[row][c]) break; // 箱子/石头阻挡
-            if (this.tiles[row][c].flipped) {
+            if (typeof isBlackHole === 'function' && isBlackHole(c, row)) break; // 黑洞阻挡
+            if (this.tiles[row][c].color !== this.cellColor) {
                 targets.push({ fromCol: col - 1, toCol: c, fromRow: row, toRow: row });
                 break;
             }
@@ -303,7 +361,7 @@ class Map {
         // 右
         for (let c = col + 1; c < this.cols; c++) {
             if (this.boxGrid[row][c] || this.stoneGrid[row][c]) break;
-            if (this.tiles[row][c].flipped) {
+            if (this.tiles[row][c].color !== this.cellColor) {
                 targets.push({ fromCol: col + 1, toCol: c, fromRow: row, toRow: row });
                 break;
             }
@@ -311,7 +369,8 @@ class Map {
         // 上
         for (let r = row - 1; r >= 0; r--) {
             if (this.boxGrid[r][col] || this.stoneGrid[r][col]) break;
-            if (this.tiles[r][col].flipped) {
+            if (typeof isBlackHole === 'function' && isBlackHole(col, r)) break; // 黑洞阻挡
+            if (this.tiles[r][col].color !== this.cellColor) {
                 targets.push({ fromCol: col, toCol: col, fromRow: row - 1, toRow: r });
                 break;
             }
@@ -319,7 +378,8 @@ class Map {
         // 下
         for (let r = row + 1; r < this.rows; r++) {
             if (this.boxGrid[r][col] || this.stoneGrid[r][col]) break;
-            if (this.tiles[r][col].flipped) {
+            if (typeof isBlackHole === 'function' && isBlackHole(col, r)) break; // 黑洞阻挡
+            if (this.tiles[r][col].color !== this.cellColor) {
                 targets.push({ fromCol: col, toCol: col, fromRow: row + 1, toRow: r });
                 break;
             }
@@ -356,8 +416,10 @@ class Map {
             
             let newColor, newBorder;
             if (playerTile) {
-                newColor = tile.flipped ? this.cellColor : this.flippedColor;
-                newBorder = tile.flipped ? this.borderColor : this.flippedBorderColor;
+                // 用实际颜色判断（不用 tile.flipped，避免怪物翻转导致 flipped 与颜色不同步）
+                const isFlipped = tile.color !== this.cellColor;
+                newColor = isFlipped ? this.cellColor : this.flippedColor;
+                newBorder = isFlipped ? this.borderColor : this.flippedBorderColor;
             } else {
                 newColor = this.flippedColor;
                 newBorder = this.flippedBorderColor;
@@ -376,6 +438,8 @@ class Map {
             for (let col = 0; col < this.cols; col++) {
                 if (this.stoneGrid[row][col]) { exempt.push(`stone(${col},${row})`); continue; }
                 if (this.boxNeverPushed.has(`${col},${row}`)) { exempt.push(`box(${col},${row})`); continue; }
+                // 黑洞格豁免（无法翻转）
+                if (typeof isBlackHole === 'function' && isBlackHole(col, row)) { exempt.push(`hole(${col},${row})`); continue; }
                 // 用颜色判断，避免 flipped/color 不同步
                 const tile = this.tiles[row][col];
                 if (tile.color === this.cellColor) {
@@ -394,10 +458,10 @@ class Map {
         return true;
     }
     
-    // 检查格子是否已翻转
+    // 检查格子是否已翻转（用颜色判定，杜绝 flipped 不同步问题）
     isTileFlipped(col, row) {
         if (col >= 0 && col < this.cols && row >= 0 && row < this.rows) {
-            return this.tiles[row][col].flipped;
+            return this.tiles[row][col].color !== this.cellColor;
         }
         return false;
     }
@@ -426,9 +490,18 @@ class Map {
     canMoveTo(col, row) {
         const tile = this.getTile(col, row);
         if (!tile) return false;
+        if (typeof isBlackHole === 'function' && isBlackHole(col, row)) return false; // 黑洞不可通行
         if (this.hasStone(col, row)) return false; // 石头不可通行
         if (this.hasBox(col, row)) return true;     // 箱子可被推动
         return tile.type !== 'wall' && tile.type !== 'obstacle';
+    }
+    
+    // 奖励关卡专用：清空所有障碍物，全白地板
+    initEmpty() {
+        this.boxGrid = this.createBoxGrid();
+        this.stoneGrid = this.createBoxGrid();
+        this.boxNeverPushed = new Set();
+        this.tiles = this.createDefaultTiles();
     }
     
     // 绘制地图

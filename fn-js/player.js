@@ -37,7 +37,7 @@ class Player {
     
     // 受到伤害（死亡一次扣除一次数值），无敌中免疫伤害
     takeDamage(amount = 1) {
-        if (this.invTimer > 0) return this.lives;  // 无敌中
+        if (this.invTimer > 0) return this.lives;  // 无敌中免疫（不刷新计时器）
         this.lives = Math.max(0, this.lives - amount);
         this.invTimer = 800;  // 受伤后 800ms 无敌
         return this.lives;
@@ -53,6 +53,7 @@ class Player {
     
     update(dt) {
         if (!isFinite(dt)) dt = 0;
+        // 无敌倒计时（不移动时也要更新）
         if (this.invTimer > 0) this.invTimer = Math.max(0, this.invTimer - dt);
         if (!this.isMoving) return;
         
@@ -138,6 +139,11 @@ class Player {
     }
     
     flipCurrentTile() {
+        // 奖励关卡：翻牌逻辑交给 game.js
+        if (game && game.bonusMode && game.bonusPhase === 'playing') {
+            game.onBonusFlip(this.gridX, this.gridY);
+            return true;
+        }
         if (map) {
             map.flipLine(this.gridX, this.gridY);
             return true;
@@ -145,8 +151,29 @@ class Player {
         return false;
     }
     
-    // 重生：瞬移到起点
+    // 重生：瞬移到起点 + 无敌闪烁
     respawn() {
+        const oldX = this.gridX;
+        const oldY = this.gridY;
+        const oldPx = this.pixelX;
+        const oldPy = this.pixelY;
+        
+        // 手中怪物从原位飞出去死亡（不再原地丢弃）
+        if (this.carriedGhost) {
+            const g = this.carriedGhost;
+            g.carried = false;
+            g.flying = true;
+            g.moveSpeed = THROW_FLY_SPEED;
+            g.flyDx = this.lastDx;
+            g.flyDy = this.lastDy;
+            g.pixelX = oldPx;
+            g.pixelY = oldPy;
+            g.gridX = oldX;
+            g.gridY = oldY;
+            this.carriedGhost = null;
+            console.log(`[Player] 受伤，手中怪物飞出 (${g.flyDx},${g.flyDy})`);
+        }
+        
         this.gridX = 3;
         this.gridY = 2;
         const cx = OFFSET_X + 3 * CELL_SIZE + CELL_SIZE / 2;
@@ -156,13 +183,7 @@ class Player {
         this.targetPixelX = this.pixelX;
         this.targetPixelY = this.pixelY;
         this.isMoving = false;
-        // 重生时丢弃手中怪物
-        if (this.carriedGhost) {
-            this.carriedGhost.carried = false;
-            this.carriedGhost.gridX = this.gridX;
-            this.carriedGhost.gridY = this.gridY;
-            this.carriedGhost = null;
-        }
+        this.invTimer = 2000;  // 重生后 2 秒无敌
     }
     
     // 拾取/投掷硬直怪物（K键）
@@ -178,12 +199,25 @@ class Player {
         // 拾取：脚下有硬直怪物？
         if (!enemies) return;
         const idx = enemies.findIndex(e => e && e.alive && e.stunned > 0 &&
-            e.gridX === this.gridX && e.gridY === this.gridY);
+            this._canPickupStunned(e));
         if (idx >= 0) {
             enemies[idx].carried = true;
             this.carriedGhost = enemies[idx];
             console.log(`[Player] 拾起硬直怪物`);
         }
+    }
+    
+    // 判断能否拾取硬直怪物：逻辑同格，或显示区域与玩家当前格重叠（处理卡在两个格子中间的情况）
+    _canPickupStunned(e) {
+        // 1) 严格逻辑同格
+        if (e.gridX === this.gridX && e.gridY === this.gridY) return true;
+        
+        // 2) 显示区域与玩家当前格重叠（怪物在滑动中被击停时会卡在两个格子之间）
+        const px = OFFSET_X + this.gridX * CELL_SIZE;
+        const py = OFFSET_Y + this.gridY * CELL_SIZE;
+        const size = e.size || (CELL_SIZE - BORDER_WIDTH * 2);
+        return e.pixelX < px + CELL_SIZE && e.pixelX + size > px &&
+               e.pixelY < py + CELL_SIZE && e.pixelY + size > py;
     }
     
     // 投掷手中怪物
@@ -194,6 +228,7 @@ class Player {
         
         // 设为飞行状态：直线飞出
         g.flying = true;
+        g.moveSpeed = THROW_FLY_SPEED;  // 飞行速度
         g.flyDx = this.lastDx;
         g.flyDy = this.lastDy;
         g.pixelX = this.pixelX;

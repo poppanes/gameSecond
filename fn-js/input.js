@@ -20,9 +20,13 @@ class InputHandler {
         
         window.addEventListener('keyup', (e) => {
             this.keys[e.code] = false;
-            this.onKeyUp(e.code);
+            if (typeof this.onKeyUp === 'function') this.onKeyUp(e.code);
         });
     }
+    
+    // 基类空实现，子类按需重写
+    onKeyDown(code) {}
+    onKeyUp(code) {}
     
 }
 
@@ -49,7 +53,7 @@ class GameInput extends InputHandler {
         // 游戏结束：空格键重新开始
         if (!this.enabled) {
             if (code === 'Space') {
-                game.restart();
+                game.restart('Space键');
             }
             return;
         }
