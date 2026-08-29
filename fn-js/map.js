@@ -448,10 +448,10 @@ class Map {
             }
         }
         if (exempt.length > 0) {
-            console.log(`[areAllFlipped] 豁免: ${exempt.join(' ')} (共${exempt.length}格)`);
+            // console.log(`[areAllFlipped] 豁免: ${exempt.join(' ')} (共${exempt.length}格)`);
         }
         if (unflipped.length > 0) {
-            console.log(`[areAllFlipped] 需翻转: ${unflipped.join(' ')} (共${unflipped.length}格)`);
+            // console.log(`[areAllFlipped] 需翻转: ${unflipped.join(' ')} (共${unflipped.length}格)`);
             return false;
         }
         console.log(`[areAllFlipped] ✅ 全部翻转完成！`);
