@@ -38,6 +38,9 @@ class Map {
         this.stoneImage.onload = () => { this.stoneImageLoaded = true; };
         this.stoneGrid = this.createBoxGrid(); // 复用同样的二维网格创建
         
+        // 墙系统（空气墙：不可通行、不可翻转、豁免通关）
+        this.wallGrid = this.createBoxGrid();
+        
         // 放置石头和箱子（石头先放，箱子避开石头）
         this.placeStones();
         this.placeBoxes();
@@ -55,15 +58,7 @@ class Map {
     // 放置石头（避开角落怪物出生点 + 相邻格 + 玩家起点）
     placeStones() {
         const STONE_COUNT = 2;
-        const forbidden = new Set([
-            '0,0', '7,0', '0,6', '7,6',  // 4个角落（怪物出生点）
-            '3,2'                          // 玩家起点
-        ]);
-        // 角落相邻格也禁止（防止堵死怪物）
-        this._forbidNeighbors(forbidden, 0, 0);
-        this._forbidNeighbors(forbidden, 7, 0);
-        this._forbidNeighbors(forbidden, 0, 6);
-        this._forbidNeighbors(forbidden, 7, 6);
+        const forbidden = this._buildForbiddenSet();
         
         for (let i = 0; i < STONE_COUNT; i++) {
             let col, row, key;
@@ -93,24 +88,38 @@ class Map {
         });
     }
     
+    // 构建禁止摆放区：四角出生点 + 相邻格 + 玩家起点（随机摆放与预设布局共用）
+    // includeBirthNeighbors=false 时不包含角落相邻格（用于黑洞/墙——怪进不去，不算阻塞出生点）
+    _buildForbiddenSet(includeBirthNeighbors = true) {
+        const forbidden = new Set([
+            '0,0', `${this.cols - 1},0`, `0,${this.rows - 1}`, `${this.cols - 1},${this.rows - 1}`,  // 4个角落（怪物出生点）
+            '3,2'  // 玩家起点
+        ]);
+        if (includeBirthNeighbors) {
+            this._forbidNeighbors(forbidden, 0, 0);
+            this._forbidNeighbors(forbidden, this.cols - 1, 0);
+            this._forbidNeighbors(forbidden, 0, this.rows - 1);
+            this._forbidNeighbors(forbidden, this.cols - 1, this.rows - 1);
+        }
+        return forbidden;
+    }
+    
     // 检查指定位置是否有石头
     hasStone(col, row) {
         if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return false;
         return this.stoneGrid[row][col];
     }
     
+    // 检查指定位置是否有墙（空气墙）
+    hasWall(col, row) {
+        if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return false;
+        return this.wallGrid[row][col];
+    }
+    
     // 放置初始箱子（避开角落+玩家起点+石头）
     placeBoxes() {
         const BOX_COUNT = 3;
-        const forbidden = new Set([
-            '0,0', '7,0', '0,6', '7,6',  // 4个角落（Ghost出生点）
-            '3,2'                          // 玩家起点
-        ]);
-        // 仅禁止角落的直接相邻格（防止Ghost被堵死）
-        this._forbidNeighbors(forbidden, 0, 0);
-        this._forbidNeighbors(forbidden, 7, 0);
-        this._forbidNeighbors(forbidden, 0, 6);
-        this._forbidNeighbors(forbidden, 7, 6);
+        const forbidden = this._buildForbiddenSet();
         // 添加石头位置到禁止列表
         for (let r = 0; r < this.rows; r++) {
             for (let c = 0; c < this.cols; c++) {
@@ -143,6 +152,63 @@ class Map {
         if (placed < BOX_COUNT) {
             console.warn(`[placeBoxes] 最终仅生成了 ${placed}/${BOX_COUNT} 个箱子`);
         }
+    }
+    
+    // 应用预设布局（覆盖随机摆放）。layoutData: { stones:[[列,行],...], boxes:[[列,行],...], walls:[[列,行],...], holes:[[列,行],...] }
+    // 越界 / 禁区 / 石头箱子墙黑洞重叠的坐标自动跳过并告警。
+    applyLayout(layoutData) {
+        if (!layoutData) return;
+        // 重置为全空
+        this.stoneGrid = this.createBoxGrid();
+        this.boxGrid = this.createBoxGrid();
+        this.wallGrid = this.createBoxGrid();
+        this.boxNeverPushed = new Set();
+        
+        const forbidden = this._buildForbiddenSet();                // 含角落相邻格（石头/箱子需要）
+        const blockedForbidden = this._buildForbiddenSet(false);     // 仅角落+玩家起点（墙/黑洞用，怪本来也进不去）
+        const inBounds = (c, r) => c >= 0 && c < this.cols && r >= 0 && r < this.rows;
+        const stones = layoutData.stones || [];
+        const boxes = layoutData.boxes || [];
+        const walls = layoutData.walls || [];
+        const holes = layoutData.holes || [];
+        
+        stones.forEach(([c, r], i) => {
+            const key = `${c},${r}`;
+            if (!inBounds(c, r)) { console.warn(`[applyLayout] 石头${i + 1}越界 (${c},${r})，跳过`); return; }
+            if (forbidden.has(key)) { console.warn(`[applyLayout] 石头${i + 1}位于禁区 (${c},${r})，跳过`); return; }
+            this.stoneGrid[r][c] = true;
+            forbidden.add(key);
+        });
+        boxes.forEach(([c, r], i) => {
+            const key = `${c},${r}`;
+            if (!inBounds(c, r)) { console.warn(`[applyLayout] 箱子${i + 1}越界 (${c},${r})，跳过`); return; }
+            if (forbidden.has(key)) { console.warn(`[applyLayout] 箱子${i + 1}位于禁区 (${c},${r})，跳过`); return; }
+            if (this.stoneGrid[r][c]) { console.warn(`[applyLayout] 箱子${i + 1}与石头重叠 (${c},${r})，跳过`); return; }
+            this.boxGrid[r][c] = true;
+            this.boxNeverPushed.add(key);
+            forbidden.add(key);
+        });
+        walls.forEach(([c, r], i) => {
+            const key = `${c},${r}`;
+            if (!inBounds(c, r)) { console.warn(`[applyLayout] 墙${i + 1}越界 (${c},${r})，跳过`); return; }
+            if (blockedForbidden.has(key)) { console.warn(`[applyLayout] 墙${i + 1}位于禁区 (${c},${r})，跳过`); return; }
+            if (this.stoneGrid[r][c]) { console.warn(`[applyLayout] 墙${i + 1}与石头重叠 (${c},${r})，跳过`); return; }
+            if (this.boxGrid[r][c]) { console.warn(`[applyLayout] 墙${i + 1}与箱子重叠 (${c},${r})，跳过`); return; }
+            this.wallGrid[r][c] = true;
+            forbidden.add(key);
+        });
+        holes.forEach(([c, r], i) => {
+            const key = `${c},${r}`;
+            if (!inBounds(c, r)) { console.warn(`[applyLayout] 黑洞${i + 1}越界 (${c},${r})，跳过`); return; }
+            if (blockedForbidden.has(key)) { console.warn(`[applyLayout] 黑洞${i + 1}位于禁区 (${c},${r})，跳过`); return; }
+            if (this.stoneGrid[r][c]) { console.warn(`[applyLayout] 黑洞${i + 1}与石头重叠 (${c},${r})，跳过`); return; }
+            if (this.boxGrid[r][c]) { console.warn(`[applyLayout] 黑洞${i + 1}与箱子重叠 (${c},${r})，跳过`); return; }
+            if (this.wallGrid[r][c]) { console.warn(`[applyLayout] 黑洞${i + 1}与墙重叠 (${c},${r})，跳过`); return; }
+            // 黑洞存于全局 blackHoles（owner: null = 地形黑洞，不会被 Owl 死亡回收）
+            if (typeof blackHoles !== 'undefined') blackHoles.push({ col: c, row: r, owner: null });
+            forbidden.add(key);
+        });
+        console.log(`[applyLayout] 石头${stones.length} 箱子${boxes.length} 墙${walls.length} 黑洞${holes.length} 已布置`);
     }
     
     // 检查指定位置是否有箱子
@@ -224,8 +290,14 @@ class Map {
             return false;
         }
         
+        // 黑洞不可通行：箱子不能被推入黑洞（与墙/石头同性质）
+        if (typeof isBlackHole === 'function' && isBlackHole(newCol, newRow)) {
+            console.log(`[pushBox] → 目标格(${newCol},${newRow})是黑洞，箱子不能被推入`);
+            return false;
+        }
         // 石头或障碍物不能通行
         if (this.stoneGrid[newRow][newCol]) return false;
+        if (this.wallGrid[newRow][newCol]) return false;
         if (this.tiles[newRow][newCol].type === 'wall' || this.tiles[newRow][newCol].type === 'obstacle') return false;
         
         // 条件D：目标位置有玩家 → 推动玩家（可能推出地图致死）
@@ -261,6 +333,7 @@ class Map {
                 player.targetPixelX = player.pixelX;
                 player.targetPixelY = player.pixelY;
                 player.isMoving = false;
+                player.boost = 1;
                 console.log(`[pushBox] → 箱子推动玩家 (${newCol},${newRow}) → (${pNextCol},${pNextRow})`);
             }
             
@@ -351,7 +424,7 @@ class Map {
         
         // 左
         for (let c = col - 1; c >= 0; c--) {
-            if (this.boxGrid[row][c] || this.stoneGrid[row][c]) break; // 箱子/石头阻挡
+            if (this.boxGrid[row][c] || this.stoneGrid[row][c] || this.wallGrid[row][c]) break; // 箱子/石头/墙阻挡
             if (typeof isBlackHole === 'function' && isBlackHole(c, row)) break; // 黑洞阻挡
             if (this.tiles[row][c].color !== this.cellColor) {
                 targets.push({ fromCol: col - 1, toCol: c, fromRow: row, toRow: row });
@@ -360,7 +433,7 @@ class Map {
         }
         // 右
         for (let c = col + 1; c < this.cols; c++) {
-            if (this.boxGrid[row][c] || this.stoneGrid[row][c]) break;
+            if (this.boxGrid[row][c] || this.stoneGrid[row][c] || this.wallGrid[row][c]) break;
             if (this.tiles[row][c].color !== this.cellColor) {
                 targets.push({ fromCol: col + 1, toCol: c, fromRow: row, toRow: row });
                 break;
@@ -368,7 +441,7 @@ class Map {
         }
         // 上
         for (let r = row - 1; r >= 0; r--) {
-            if (this.boxGrid[r][col] || this.stoneGrid[r][col]) break;
+            if (this.boxGrid[r][col] || this.stoneGrid[r][col] || this.wallGrid[r][col]) break;
             if (typeof isBlackHole === 'function' && isBlackHole(col, r)) break; // 黑洞阻挡
             if (this.tiles[r][col].color !== this.cellColor) {
                 targets.push({ fromCol: col, toCol: col, fromRow: row - 1, toRow: r });
@@ -377,7 +450,7 @@ class Map {
         }
         // 下
         for (let r = row + 1; r < this.rows; r++) {
-            if (this.boxGrid[r][col] || this.stoneGrid[r][col]) break;
+            if (this.boxGrid[r][col] || this.stoneGrid[r][col] || this.wallGrid[r][col]) break;
             if (typeof isBlackHole === 'function' && isBlackHole(col, r)) break; // 黑洞阻挡
             if (this.tiles[r][col].color !== this.cellColor) {
                 targets.push({ fromCol: col, toCol: col, fromRow: row + 1, toRow: r });
@@ -437,6 +510,7 @@ class Map {
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
                 if (this.stoneGrid[row][col]) { exempt.push(`stone(${col},${row})`); continue; }
+                if (this.wallGrid[row][col]) { exempt.push(`wall(${col},${row})`); continue; }
                 if (this.boxNeverPushed.has(`${col},${row}`)) { exempt.push(`box(${col},${row})`); continue; }
                 // 黑洞格豁免（无法翻转）
                 if (typeof isBlackHole === 'function' && isBlackHole(col, row)) { exempt.push(`hole(${col},${row})`); continue; }
@@ -448,10 +522,10 @@ class Map {
             }
         }
         if (exempt.length > 0) {
-            // console.log(`[areAllFlipped] 豁免: ${exempt.join(' ')} (共${exempt.length}格)`);
+            console.log(`[areAllFlipped] 豁免: ${exempt.join(' ')} (共${exempt.length}格)`);
         }
         if (unflipped.length > 0) {
-            // console.log(`[areAllFlipped] 需翻转: ${unflipped.join(' ')} (共${unflipped.length}格)`);
+            console.log(`[areAllFlipped] 需翻转: ${unflipped.join(' ')} (共${unflipped.length}格)`);
             return false;
         }
         console.log(`[areAllFlipped] ✅ 全部翻转完成！`);
@@ -492,6 +566,7 @@ class Map {
         if (!tile) return false;
         if (typeof isBlackHole === 'function' && isBlackHole(col, row)) return false; // 黑洞不可通行
         if (this.hasStone(col, row)) return false; // 石头不可通行
+        if (this.hasWall(col, row)) return false;  // 墙不可通行
         if (this.hasBox(col, row)) return true;     // 箱子可被推动
         return tile.type !== 'wall' && tile.type !== 'obstacle';
     }
@@ -500,6 +575,7 @@ class Map {
     initEmpty() {
         this.boxGrid = this.createBoxGrid();
         this.stoneGrid = this.createBoxGrid();
+        this.wallGrid = this.createBoxGrid();
         this.boxNeverPushed = new Set();
         this.tiles = this.createDefaultTiles();
     }
@@ -525,6 +601,7 @@ class Map {
         }
         this.drawStones();
         this.drawBoxes();
+        this.drawWalls();
     }
     
     // 绘制所有石头
@@ -560,6 +637,40 @@ class Map {
         const y = this.offsetY + row * this.cellSize + this.borderWidth;
         const size = this.cellSize - this.borderWidth * 2;
         this.ctx.drawImage(this.boxImage, x, y, size, size);
+    }
+    
+    // 绘制所有墙（空气墙）
+    drawWalls() {
+        if (!WALL_VISIBLE) return;  // 空气墙完全不可见
+        for (let row = 0; row < this.rows; row++) {
+            for (let col = 0; col < this.cols; col++) {
+                if (this.wallGrid[row][col]) {
+                    this.drawWall(col, row);
+                }
+            }
+        }
+    }
+    
+    // 绘制单个墙（半透明可视化，便于编辑调试）
+    drawWall(col, row) {
+        const x = this.offsetX + col * this.cellSize;
+        const y = this.offsetY + row * this.cellSize;
+        // 半透明填充
+        this.ctx.fillStyle = 'rgba(90, 160, 255, 0.22)';
+        this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+        // 边框
+        this.ctx.strokeStyle = 'rgba(90, 160, 255, 0.75)';
+        this.ctx.lineWidth = 3;
+        this.ctx.strokeRect(x, y, this.cellSize, this.cellSize);
+        // 对角斜线标识
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, y);
+        this.ctx.lineTo(x + this.cellSize, y + this.cellSize);
+        this.ctx.moveTo(x + this.cellSize, y);
+        this.ctx.lineTo(x, y + this.cellSize);
+        this.ctx.strokeStyle = 'rgba(90, 160, 255, 0.5)';
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
     }
     
     // 绘制单个格子

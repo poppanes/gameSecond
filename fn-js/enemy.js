@@ -26,8 +26,8 @@ let OWL_FLIP_CHANCE = 0.35;        // Owl 翻板概率(0~1)
 let TIME_DANGER_THRESHOLD = 50000;  // 时间低于此值(ms)进入加速
 let TIME_DANGER_SPEED_MULT = 1.5;   // 加速阶段移动速度倍率
 let TIME_DANGER_FLIP_MULT = 2;      // 加速阶段翻板速度倍率
-let FORCE_ENEMY_TYPE = 'Owl';        // 强制怪物类型（null=随机, 'Ghost','Spider','Snowman','Octopus','Owl'）
-let MAX_ENEMIES = 1;                // 地图上最大怪物数量
+let FORCE_ENEMY_TYPE = null;         // 强制怪物类型（null=随机, 'Ghost','Spider','Snowman','Octopus','Owl'）
+let MAX_ENEMIES = 1;                // 地图上最大怪物数量（由关卡配置动态设置）
 let THROW_FLY_SPEED = 1;          // 投掷飞行速度(像素/ms)
 let THROW_KNOCKBACK_SPEED = 1.2;    // 撞飞被撞怪物速度(像素/ms)
 let BOUNCE_GRAVITY = 0.002;         // 反弹怪物重力加速度(px/ms²)
@@ -109,11 +109,12 @@ class Enemy {
         this.deathImage.onload = () => { this.deathImageLoaded = true; };
     }
 
-    // 判断格子是否可通行（避开石头/箱子/黑洞）
+    // 判断格子是否可通行（避开石头/箱子/墙/黑洞）
     _canPass(col, row) {
         if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return false;
         if (map && map.hasStone(col, row)) return false;
         if (map && map.hasBox(col, row)) return false;
+        if (map && map.hasWall(col, row)) return false;
         if (isBlackHole(col, row)) return false;
         return true;
     }
@@ -240,8 +241,8 @@ class Enemy {
                     this.bouncing = true;
                     return;
                 }
-                // 撞到石头/箱子
-                if (map && (map.hasStone(cx, cy) || map.hasBox(cx, cy))) {
+                // 撞到石头/箱子/墙
+                if (map && (map.hasStone(cx, cy) || map.hasBox(cx, cy) || map.hasWall(cx, cy))) {
                     this.alive = false;
                     console.log(`[enemy] 飞行撞障碍(${cx},${cy})，等待复活`);
                     return;
@@ -566,7 +567,7 @@ class Ghost extends Enemy {
                 const key = `${nx},${ny}`;
                 if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
                 if (visited.has(key)) continue;
-                if (map.hasStone(nx, ny) || map.hasBox(nx, ny)) continue;
+                if (map.hasStone(nx, ny) || map.hasBox(nx, ny) || map.hasWall(nx, ny)) continue;
                 if (map.isTileFlipped(nx, ny) &&
                     (Math.abs(nx - this.gridX) + Math.abs(ny - this.gridY)) > 1) {
                     return { x: nx, y: ny };
@@ -647,7 +648,7 @@ class Spider extends Enemy {
             const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
             const valid = dirs.filter(([dx,dy]) => {
                 const nx=this.gridX+dx, ny=this.gridY+dy;
-                return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
+                return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
             });
             if (valid.length>0) {
                 const [dx,dy] = valid[Math.floor(Math.random()*valid.length)];
@@ -784,7 +785,7 @@ class Snowman extends Enemy {
             const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
             const valid = dirs.filter(([dx,dy]) => {
                 const nx=this.gridX+dx, ny=this.gridY+dy;
-                return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
+                return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
             });
             if (valid.length>0) {
                 const [dx,dy] = valid[Math.floor(Math.random()*valid.length)];
@@ -810,7 +811,7 @@ class Snowman extends Enemy {
                 const key = `${nx},${ny}`;
                 if (nx<0||nx>=COLS||ny<0||ny>=ROWS) continue;
                 if (visited.has(key)) continue;
-                if (map.hasStone(nx,ny)||map.hasBox(nx,ny)) continue;
+                if (map.hasStone(nx,ny)||map.hasBox(nx,ny)||map.hasWall(nx,ny)) continue;
                 if (map.isTileFlipped(nx,ny)) return { x:nx, y:ny };
                 visited.add(key);
                 queue.push({ x:nx, y:ny });
@@ -831,7 +832,7 @@ class Snowman extends Enemy {
                 const key=`${nx},${ny}`;
                 if (nx===target.x&&ny===target.y) return path.length===0?{dx,dy}:path[0];
                 if (nx>=0&&nx<COLS&&ny>=0&&ny<ROWS&&!visited.has(key)) {
-                    if (map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!isBlackHole(nx,ny)) {
+                    if (map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)) {
                         visited.add(key);
                         queue.push({x:nx,y:ny,path:[...path,{dx,dy}]});
                     }
@@ -922,8 +923,8 @@ class Octopus extends Enemy {
             const nx=this.gridX+dx, ny=this.gridY+dy;
             // 越界
             if (nx<0||nx>=COLS||ny<0||ny>=ROWS) continue;
-            // 石头或黑洞或被怪物占据
-            if (map && (map.hasStone(nx,ny) || isBlackHole(nx,ny))) continue;
+            // 石头或墙或黑洞或被怪物占据
+            if (map && (map.hasStone(nx,ny) || map.hasWall(nx,ny) || isBlackHole(nx,ny))) continue;
             if (_isCellBlocked(nx, ny, this)) continue;
             
             if (map && map.hasBox(nx,ny)) {
@@ -1038,7 +1039,7 @@ class Owl extends Enemy {
         const valid = dirs.filter(([dx,dy]) => {
             const nx=this.gridX+dx, ny=this.gridY+dy;
             return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS &&
-                map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
+                map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
         });
 
         // 完全被困：传送到一个随机可通行位置
@@ -1193,6 +1194,22 @@ function spawnSpider() {
     const s = new Spider(pt.col, pt.row);
     enemies.push(s);
     console.log(`[enemy] Spider 生成 (${pt.col},${pt.row}) 总数:${enemies.length}`);
+}
+
+// 在指定坐标生成指定类型怪物（测试地图专用，绕过四角出生点）
+function spawnEnemyAt(type, col, row) {
+    let e = null;
+    switch (type) {
+        case 'Ghost':   e = new Ghost(col, row);   break;
+        case 'Spider':  e = new Spider(col, row);  break;
+        case 'Snowman': e = new Snowman(col, row); break;
+        case 'Octopus': e = new Octopus(col, row); break;
+        case 'Owl':     e = new Owl(col, row);     break;
+        default: console.warn(`[test] 未知怪物类型: ${type}`); return null;
+    }
+    enemies.push(e);
+    console.log(`[test] 生成 ${e.name} (${col},${row}) 总数:${enemies.length}`);
+    return e;
 }
 
 // 将死亡敌人加入复活队列

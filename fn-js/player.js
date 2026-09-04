@@ -21,7 +21,9 @@ class Player {
         this.targetPixelX = this.pixelX;
         this.targetPixelY = this.pixelY;
         this.isMoving = false;
-        this.moveSpeed = 0.35;   // 像素/ms (~250ms/格)
+        this.moveSpeed = 0.55;   // 像素/ms (~160ms/格，连续移动更跟手)
+        this.boost = 1;          // 转向加速倍率（input 检测到转向意图时临时提高，走完本格自动重置）
+        this.lastMoveDir = null; // 上一次移动方向（用于判断转向）
         
         // 生命值（初始 2 条命，死亡一次扣 1）
         this.lives = 2;
@@ -65,10 +67,12 @@ class Player {
             this.pixelX = this.targetPixelX;
             this.pixelY = this.targetPixelY;
             this.isMoving = false;
+            this.boost = 1;   // 本格结束，重置加速
             // 滑动结束后拾取道具
             pickupItem(this.gridX, this.gridY);
         } else {
-            const step = Math.min(this.moveSpeed * dt, dist);
+            // 转向时按 boost 倍率加速走完本格，缩短转向延迟（位置仍连续，无跳变）
+            const step = Math.min(this.moveSpeed * this.boost * dt, dist);
             this.pixelX += (dx / dist) * step;
             this.pixelY += (dy / dist) * step;
         }
@@ -107,6 +111,7 @@ class Player {
         this.targetPixelX = cx - this.width / 2;
         this.targetPixelY = cy - this.height / 2;
         this.isMoving = true;
+        this.boost = 1;   // 新格从正常速度起步
     }
     
     // 更新最后移动方向
@@ -117,6 +122,7 @@ class Player {
     move(dx, dy) {
         this._setDir(dx, dy);
         if (this.isMoving) return false;  // 滑动中不接受移动
+        this.lastMoveDir = { dx, dy };    // 记录本次方向（供转向判断）
         
         const newX = this.gridX + dx;
         const newY = this.gridY + dy;
@@ -126,6 +132,8 @@ class Player {
                 const result = map.pushBox(newX, newY, dx, dy);
                 if (result === false) return false;
                 if (result === 'destroyed') return true; // 箱子撞毁，位置不变
+                // 兜底：箱子被消除/移走后，玩家进入该格前再校验黑洞（防止推箱顺势进入黑洞格）
+                if (typeof isBlackHole === 'function' && isBlackHole(newX, newY)) return false;
                 // 箱子移走了，玩家进入该格
                 this._commitMove(newX, newY);
                 return true;
@@ -183,6 +191,7 @@ class Player {
         this.targetPixelX = this.pixelX;
         this.targetPixelY = this.pixelY;
         this.isMoving = false;
+        this.boost = 1;          // 重生后重置加速
         this.invTimer = 2000;  // 重生后 2 秒无敌
     }
     
