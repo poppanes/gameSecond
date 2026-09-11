@@ -21,7 +21,7 @@ class Player {
         this.targetPixelX = this.pixelX;
         this.targetPixelY = this.pixelY;
         this.isMoving = false;
-        this.moveSpeed = 0.55;   // 像素/ms (~160ms/格，连续移动更跟手)
+        this.moveSpeed = 0.40;   // 像素/ms (~220ms/格，平衡值：略快于怪物但不过分)
         this.boost = 1;          // 转向加速倍率（input 检测到转向意图时临时提高，走完本格自动重置）
         this.lastMoveDir = null; // 上一次移动方向（用于判断转向）
         

@@ -34,7 +34,7 @@ class InputHandler {
 // 游戏输入控制器
 // ============================================
 // 转向加速倍率：移动中按新方向时，当前格按此倍率加速走完（缩短转向延迟）
-const TURN_BOOST = 3;
+const TURN_BOOST = 2;
 
 class GameInput extends InputHandler {
     constructor(player) {
