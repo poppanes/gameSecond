@@ -47,7 +47,12 @@ const TEST_TOOL_NAMES = {
     Ghost: '幽灵', Spider: '蜘蛛', Snowman: '雪人', Octopus: '章鱼', Owl: '猫头鹰',
     stone: '石头', box: '箱子', wall: '墙', hole: '黑洞',
     clearObj: '清除物件', clearEnemy: '清除怪物',
+    cherry: '樱桃', apple: '苹果', peach: '桃子', watermelon: '西瓜', icecream: '雪糕',
+    time: '沙漏', hammer: '铁锤', heart: '爱心', boom: '炸弹',
 };
+
+// 测试地图道具循环顺序（[I] 键循环切换）
+const TEST_ITEM_TYPES = ['cherry', 'apple', 'peach', 'watermelon', 'icecream', 'time', 'hammer', 'heart', 'boom'];
 
 // 奖励关卡水果类型（与道具水果对应）
 const BONUS_FRUIT_TYPES = {
@@ -299,6 +304,12 @@ class Game {
                     }
                 }
                 break;
+            // 道具：直接放置指定类型
+            case 'cherry': case 'apple': case 'peach': case 'watermelon': case 'icecream':
+            case 'time': case 'hammer': case 'heart': case 'boom':
+                items.push(new Item(tool, col, row));
+                console.log(`[test] 放置道具 ${ITEM_TYPES[tool].name} (${col},${row})`);
+                break;
         }
     }
     
@@ -316,6 +327,7 @@ class Game {
             case 'KeyT': this._testTool = 'hole';      break;
             case 'KeyC': this._testTool = 'clearObj';  break;
             case 'KeyG': this._testTool = 'clearEnemy';break;
+            case 'KeyI': this._cycleTestItem();        break;
             case 'Escape': case 'Backspace':
                 this._backToMenu();
                 break;
@@ -323,6 +335,14 @@ class Game {
         if (this._testTool) {
             console.log(`[test] 当前工具: ${TEST_TOOL_NAMES[this._testTool]}（鼠标点击格子放置）`);
         }
+    }
+    
+    // 循环切换道具类型（[I] 键）
+    _cycleTestItem() {
+        const idx = TEST_ITEM_TYPES.indexOf(this._testTool);
+        const next = (idx + 1) % TEST_ITEM_TYPES.length;
+        this._testTool = TEST_ITEM_TYPES[next];
+        console.log(`[test] 切换到道具: ${TEST_TOOL_NAMES[this._testTool]}`);
     }
     
     loop(timestamp) {
@@ -743,12 +763,19 @@ class Game {
         ctx.strokeText(line2, cx, y);
         ctx.fillText(line2, cx, y);
         
-        // 第三行：其他
+        // 第三行：道具
         y += 26;
-        ctx.fillStyle = '#d9b98a';
-        const line3 = '[Esc/Backspace]返回菜单  [空格]重开沙盒  [方向键/WASD]移动';
+        ctx.fillStyle = '#f0a0c0';
+        const line3 = '道具: [I]循环切换(樱桃/苹果/桃子/西瓜/雪糕/沙漏/铁锤/爱心/炸弹)';
         ctx.strokeText(line3, cx, y);
         ctx.fillText(line3, cx, y);
+        
+        // 第四行：其他
+        y += 26;
+        ctx.fillStyle = '#d9b98a';
+        const line4 = '[Esc/Backspace]返回菜单  [空格]重开沙盒  [方向键/WASD]移动';
+        ctx.strokeText(line4, cx, y);
+        ctx.fillText(line4, cx, y);
         
         ctx.restore();
     }
