@@ -1,6 +1,11 @@
 // ============================================
 // 角色玩家类
 // ============================================
+// 行走步态同步：每格播放的行走帧数（8帧完整步态跨约2.7格，帧率约13fps，贴近素材设计节奏）
+const PIG_WALK_FRAMES_PER_CELL = 3;
+// 行走衔接宽限(ms)：跨格续走时视为仍在行走，避免步态相位被打断
+const WALK_GRACE_MS = 100;
+
 class Player {
     constructor(gridX, gridY) {
         this.gridX = gridX;
@@ -12,6 +17,16 @@ class Player {
         this.useImage = false;
         this.image = null;
         this.color = '#ff4444';
+
+        // 方块猪帧表素材（v3：walk 8帧 / push 4帧 / pick 5帧，88px 单帧，原始朝右）
+        this.pigSheets = { walk: null, push: null, pushL: null, pick: null };
+        this.pigReady = false;
+        this._loadPigSheets();
+        this.face = 'right';       // 朝向（原始帧朝右，左=镜像翻转）
+        this.pickStart = 0;        // 拾取动作起始时刻（550ms 单次播放）
+        this.pushStart = 0;        // 推箱动作起始时刻（260ms）
+        this.walkTime = 0;         // 行走帧时钟：随移动累积，与位移速度锁定（步态连贯）
+        this.lastWalkAt = 0;       // 最近一次行走累积时刻（跨格衔接宽限用）
         
         // 平滑移动
         const cx = OFFSET_X + gridX * CELL_SIZE + CELL_SIZE / 2;
@@ -52,11 +67,68 @@ class Player {
         this.image.src = imageSrc;
         this.image.onload = () => { this.useImage = true; };
     }
+
+    // 加载方块猪 v3 帧表（与 demo art-upgrade-demo 同一套素材）
+    _loadPigSheets() {
+        const defs = {
+            walk:  '../fn-image/pig_v3_walk_8.png',      // 8 帧循环，原始朝右
+            push:  '../fn-image/pig_v3_push_4.png',      // 4 帧循环，推·右
+            pushL: '../fn-image/pig_v3_push_left_4.png', // 4 帧循环，推·左（镜像件）
+            pick:  '../fn-image/pig_v3_pick_5.png',      // 5 帧单次，蹲下→起身
+        };
+        let n = 0;
+        const total = Object.keys(defs).length;
+        for (const k in defs) {
+            const img = new Image();
+            this.pigSheets[k] = img;
+            img.onload = () => { if (++n === total) this.pigReady = true; };
+            img.src = defs[k];
+        }
+    }
+
+    // 方块猪帧表绘制；返回 false = 素材未就绪（回退旧绘制分支）
+    _drawPig(ctx, x, y) {
+        const now = performance.now();
+        const FW = 88, W = this.width, H = this.height;
+        let img, frame = 0, flip = false;
+        if (this.pickStart && now - this.pickStart < 550) {          // 拾取：5 帧单次
+            img = this.pigSheets.pick;
+            frame = Math.min(4, Math.floor((now - this.pickStart) / 110));
+        } else if (this.pushStart && now - this.pushStart < 260) {   // 推箱：4 帧循环（>滑动时长盖全程）
+            img = this.face === 'left' ? this.pigSheets.pushL : this.pigSheets.push;
+            frame = Math.floor((now - this.pushStart) / 65) % 4;   // 从推箱起点计时，260ms 走完 4 帧（一整步态）
+        } else if (this.isMoving || now - this.lastWalkAt < WALK_GRACE_MS) {   // 行走：8 帧循环（帧钟与位移同步，跨格相位连续）
+            img = this.pigSheets.walk;
+            const frameMs = (CELL_SIZE / this.moveSpeed) / PIG_WALK_FRAMES_PER_CELL;   // 每帧时长随移动速度自动同步
+            frame = Math.floor(this.walkTime / frameMs) % 8;
+            flip = this.face === 'left';
+        } else {                                                     // 驻立：行走第 0 帧
+            img = this.pigSheets.walk;
+            flip = this.face === 'left';
+        }
+        if (!img || !img.complete || !img.naturalWidth) return false;
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;   // 像素画缩放禁用平滑
+        if (flip) {
+            ctx.translate(x + W, y);
+            ctx.scale(-1, 1);
+            ctx.drawImage(img, frame * FW, 0, FW, FW, 0, 0, W, H);
+        } else {
+            ctx.drawImage(img, frame * FW, 0, FW, FW, x, y, W, H);
+        }
+        ctx.restore();
+        return true;
+    }
     
     update(dt) {
         if (!isFinite(dt)) dt = 0;
         // 无敌倒计时（不移动时也要更新）
         if (this.invTimer > 0) this.invTimer = Math.max(0, this.invTimer - dt);
+        // 行走帧时钟：仅移动时累积；转向加速(boost)时步频同步加快，步幅与实际位移严格同步
+        if (this.isMoving) {
+            this.walkTime += dt * (this.boost || 1);
+            this.lastWalkAt = performance.now();
+        }
         if (!this.isMoving) return;
         
         const dx = this.targetPixelX - this.pixelX;
@@ -86,7 +158,13 @@ class Player {
         if (this.invTimer > 0 && Math.floor(this.invTimer / 100) % 2 === 0) {
             ctx.globalAlpha = 0.4;
         }
-        
+
+        // 方块猪帧表渲染（素材加载完成时优先，回退到旧的单图/程序绘制）
+        if (this.pigReady && this._drawPig(ctx, x, y)) {
+            ctx.globalAlpha = 1;
+            return;
+        }
+
         if (this.useImage && this.image && this.image.complete) {
             ctx.drawImage(this.image, x, y, this.width, this.height);
         } else {
@@ -112,11 +190,15 @@ class Player {
         this.targetPixelY = cy - this.height / 2;
         this.isMoving = true;
         this.boost = 1;   // 新格从正常速度起步
+        // 驻立后起步：行走帧时钟归零，从触地帧开始迈步（起步帧确定，不再随机跳帧）
+        if (performance.now() - this.lastWalkAt > WALK_GRACE_MS) this.walkTime = 0;
     }
     
-    // 更新最后移动方向
+    // 更新最后移动方向（含方块猪朝向：左右更新，上下保持）
     _setDir(dx, dy) {
         if (dx !== 0 || dy !== 0) { this.lastDx = dx; this.lastDy = dy; }
+        if (dx > 0) this.face = 'right';
+        if (dx < 0) this.face = 'left';
     }
     
     move(dx, dy) {
@@ -135,6 +217,7 @@ class Player {
                 // 兜底：箱子被消除/移走后，玩家进入该格前再校验黑洞（防止推箱顺势进入黑洞格）
                 if (typeof isBlackHole === 'function' && isBlackHole(newX, newY)) return false;
                 // 箱子移走了，玩家进入该格
+                this.pushStart = performance.now();   // 方块猪：播放推箱帧
                 this._commitMove(newX, newY);
                 return true;
             } else if (map && !map.canMoveTo(newX, newY)) {
@@ -212,6 +295,7 @@ class Player {
         if (idx >= 0) {
             enemies[idx].carried = true;
             this.carriedGhost = enemies[idx];
+            this.pickStart = performance.now();   // 方块猪：播放拾取帧
             console.log(`[Player] 拾起硬直怪物`);
         }
     }
