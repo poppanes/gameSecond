@@ -459,6 +459,9 @@ class Game {
             updatePendingFlips(dt);
             // 更新翻转动画
             updateAnimations(dt);
+            // 电玩特效层推进（浮动文字 / 爆裂粒子）
+            if (typeof updateFloatTexts === 'function') updateFloatTexts();
+            if (typeof updateBursts === 'function') updateBursts(dt);
             // 更新所有敌人
             enemies.forEach(e => e.update(dt));
             // 清理已死亡敌人 → 加入复活队列
@@ -591,6 +594,10 @@ class Game {
         if (map) {
             map.drawBoxesSplit(pBottom, true);
         }
+
+        // 电玩特效层（最上层：爆裂粒子 + 浮动文字）
+        if (typeof drawBursts === 'function') drawBursts(this.ctx);
+        if (typeof drawFloatTexts === 'function') drawFloatTexts(this.ctx);
         
         // 绘制倒计时（测试地图显示"测试模式"标签）
         if (this.testMode) {

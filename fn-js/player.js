@@ -63,6 +63,9 @@ class Player {
         if (this.dying) return this.lives;         // 死亡动画期间不再重复扣血
         this.lives = Math.max(0, this.lives - amount);
         this.invTimer = 800;  // 受伤后 800ms 无敌
+        // 电玩特效：受伤飘字 + 屏幕抖动
+        if (typeof spawnFloatText === 'function') spawnFloatText(this.gridX, this.gridY, '-1', '#ff4444');
+        if (typeof crtShake === 'function') crtShake();
         this._startDeath(this.lives <= 0);         // 每次死亡都播死亡动画（1.5s 后重生 / 命尽则 game over）
         return this.lives;
     }

@@ -318,6 +318,15 @@ function pickupItem(col, row) {
                 console.log(`[pickupItem] → 拾取: ${info.name} +${info.score}分`);
             }
             items[i].onPickup();
+            // 电玩特效：拾取飘字 + 闪光爆裂
+            if (typeof spawnFloatText === 'function') {
+                const fxMap = { fruit: '+' + info.score, time: '+10s', heart: '+1UP', hammer: 'STUN!',
+                                boom: 'BOOM!', flip: 'FLIP!', snow: 'FREEZE!', wave: 'WAVE!' };
+                const fxC = { fruit: '#ffd700', time: '#00e5ff', heart: '#ff6b9d', hammer: '#ff8c00',
+                              boom: '#ff4444', flip: '#00e5ff', snow: '#00e5ff', wave: '#ffd700' };
+                spawnFloatText(col, row, fxMap[info.category] || info.name, fxC[info.category] || '#ffd700');
+            }
+            if (typeof spawnBurst === 'function') spawnBurst(col, row, ['#ffd700', '#ffffff', '#ff8c00'], 12);
             items.splice(i, 1);
             return true;
         }

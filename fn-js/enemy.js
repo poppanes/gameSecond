@@ -1334,6 +1334,8 @@ function killEnemy(e, immediate = false) {
     if (!e || e._killed) return;
     e._killed = true;
     e.alive = false;
+    // 电玩特效：击杀爆裂
+    if (typeof spawnBurst === 'function') spawnBurst(e.gridX, e.gridY, ['#ff6b6b', '#ffd700', '#ffffff'], 16);
     // 怪物死亡 → 移除其创建的黑洞（黑洞恢复）
     if (e.name === 'Owl') removeBlackHolesByOwner(e);
     const idx = enemies.indexOf(e);
