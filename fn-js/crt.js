@@ -17,6 +17,16 @@
         overlay.className = 'crt-overlay';
         wrap.appendChild(overlay);
 
+        // 开机动画：水平线展开（一次性，0.7s 后移除动画类）
+        wrap.classList.add('crt-turn-on');
+        setTimeout(() => wrap.classList.remove('crt-turn-on'), 700);
+
+        // 受击屏幕抖动（player.takeDamage 调用 window.crtShake()）
+        window.crtShake = function () {
+            wrap.classList.add('shake');
+            setTimeout(() => wrap.classList.remove('shake'), 320);
+        };
+
         // 预热像素字体（canvas 首帧即可用，未加载完自动降级等宽字体）
         if (document.fonts && document.fonts.load) {
             document.fonts.load('16px "Press Start 2P"');
