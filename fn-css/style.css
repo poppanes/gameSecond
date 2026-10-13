@@ -1,11 +1,83 @@
-canvas {
-    border: 2px solid #333;
-    display: block;
-    margin: 20px auto;
+/* ============================================
+   街机电玩风格外壳
+   ============================================ */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+:root {
+    --neon-pink: #ff2d95;
+    --neon-cyan: #00e5ff;
+    --neon-gold: #ffd700;
+    --shell-bg-0: #05050d;
+    --shell-bg-1: #0d0d22;
 }
 
 body {
-    background: #1a1a2e;
     margin: 0;
-    padding: 20px;
+    padding: 24px 20px;
+    min-height: 100vh;
+    box-sizing: border-box;
+    background:
+        radial-gradient(ellipse at 50% 0%, var(--shell-bg-1) 0%, var(--shell-bg-0) 70%),
+        var(--shell-bg-0);
+}
+
+/* ---- 街机机框 ---- */
+.crt-wrap {
+    position: relative;
+    width: fit-content;
+    margin: 0 auto;
+    padding: 14px;
+    border-radius: 26px;
+    background: linear-gradient(160deg, #1a1a30 0%, #0c0c1a 55%, #14142a 100%);
+    box-shadow:
+        0 0 0 2px rgba(0, 229, 255, 0.25),
+        0 0 22px rgba(0, 229, 255, 0.18),
+        0 0 55px rgba(255, 45, 149, 0.12),
+        0 18px 50px rgba(0, 0, 0, 0.75),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+canvas {
+    display: block;
+    margin: 0;
+    border-radius: 14px;
+    border: 3px solid #1c1c3a;
+    box-shadow:
+        0 0 0 1px rgba(0, 229, 255, 0.35),
+        0 0 18px rgba(0, 229, 255, 0.22),
+        inset 0 0 40px rgba(0, 0, 0, 0.55);
+    image-rendering: pixelated;   /* 像素画整数缩放保持锐利 */
+}
+
+/* ---- CRT 屏幕特效覆盖层 ---- */
+.crt-overlay {
+    position: absolute;
+    inset: 14px;                  /* 对齐 canvas（wrap 的内边距） */
+    border-radius: 14px;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 10;
+    background:
+        /* 玻璃反光 */
+        linear-gradient(115deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0) 28%),
+        /* 扫描线 */
+        repeating-linear-gradient(0deg,
+            rgba(0, 0, 0, 0.16) 0px, rgba(0, 0, 0, 0.16) 1px,
+            rgba(0, 0, 0, 0) 1px, rgba(0, 0, 0, 0) 3px),
+        /* RGB 荫罩竖纹（极微弱） */
+        repeating-linear-gradient(90deg,
+            rgba(255, 0, 128, 0.028) 0px, rgba(255, 0, 128, 0.028) 1px,
+            rgba(0, 255, 220, 0.028) 1px, rgba(0, 255, 220, 0.028) 2px,
+            rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px),
+        /* 暗角 */
+        radial-gradient(ellipse at center,
+            rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.22) 82%, rgba(0, 0, 0, 0.5) 100%);
+    animation: crt-flicker 5s infinite steps(50);
+}
+
+/* 屏幕微闪烁（阴极射线管的呼吸感） */
+@keyframes crt-flicker {
+    0%, 100% { opacity: 0.93; }
+    30%      { opacity: 1; }
+    62%      { opacity: 0.96; }
 }

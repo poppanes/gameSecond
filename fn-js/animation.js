@@ -34,7 +34,9 @@ function addFlipAnimation(col, row, oldColor, oldBorderColor, newColor, newBorde
 }
 
 // 添加延迟翻转（先不改变格子状态，延迟后执行翻转+动画）
+// 同一格在动画未播完期间重复点击 → 忽略本次（不重复播放动画；播完后颜色已变，再按正常反向翻转）
 function addPendingFlip(col, row, oldColor, oldBorderColor, newColor, newBorderColor, toggle, delay, fromPlayer = false) {
+    if (pendingFlips.some(pf => pf.col === col && pf.row === row)) return;
     pendingFlips.push({
         col, row,
         oldColor, oldBorderColor,

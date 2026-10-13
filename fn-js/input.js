@@ -96,7 +96,7 @@ class GameInput extends InputHandler {
         // 测试地图：测试专用键转发（移动键仍走下方正常移动逻辑）
         if (game && game.testMode) {
             const testKeys = ['Digit1','Digit2','Digit3','Digit4','Digit5',
-                              'KeyQ','KeyE','KeyR','KeyT','KeyC','KeyG',
+                              'KeyQ','KeyE','KeyR','KeyT','KeyC','KeyG','KeyF',
                               'KeyI',
                               'Escape','Backspace'];
             if (testKeys.includes(code)) {

@@ -3,6 +3,9 @@
 // ============================================
 const ROWS = 7;           // 7行
 const COLS = 8;           // 8列
+// 电玩像素字体（crt.js 会预热加载；离线/未加载完自动降级等宽字体）
+const ARCADE_FONT = '"Press Start 2P", "Courier New", monospace';
+
 const CELL_SIZE = 88;     // 每格大小（含边框）
 const BORDER_WIDTH = 6;   // 边框宽度
 const CELL_CONTENT = CELL_SIZE - BORDER_WIDTH * 2;
@@ -42,17 +45,18 @@ const BONUS_FLASH_INTERVAL = 250;       // 闪烁间隔 ms
 // 是否显示帧率（调试用，上线可改 false）
 const SHOW_FPS = true;
 
-// 测试地图工具名（显示用）
+// 测试地图工具名（显示用；与 ITEM_TYPES 定版对齐，避免出现 undefined）
 const TEST_TOOL_NAMES = {
     Ghost: '幽灵', Spider: '蜘蛛', Snowman: '雪人', Octopus: '章鱼', Owl: '猫头鹰',
     stone: '石头', box: '箱子', wall: '墙', hole: '黑洞',
     clearObj: '清除物件', clearEnemy: '清除怪物',
-    cherry: '樱桃', apple: '苹果', peach: '桃子', watermelon: '西瓜', icecream: '雪糕',
+    banana: '香蕉', orange: '橙子', dragonfruit: '火龙果', watermelon: '西瓜', icecream: '雪糕饮料',
     time: '沙漏', hammer: '铁锤', heart: '爱心', boom: '炸弹',
+    flip1: '翻转卡·青', flip2: '翻转卡·粉', cube: '魔方', snowflake: '雪花',
 };
 
 // 测试地图道具循环顺序（[I] 键循环切换）
-const TEST_ITEM_TYPES = ['cherry', 'apple', 'peach', 'watermelon', 'icecream', 'time', 'hammer', 'heart', 'boom'];
+const TEST_ITEM_TYPES = ['banana', 'orange', 'dragonfruit', 'watermelon', 'icecream', 'time', 'hammer', 'heart', 'boom', 'flip1', 'flip2', 'cube', 'snowflake'];
 
 // 奖励关卡水果类型（与道具水果对应）
 const BONUS_FRUIT_TYPES = {
@@ -69,11 +73,13 @@ const BONUS_FRUIT_TYPES = {
 class Game {
     constructor() {
         this.canvas = document.getElementById('canvas1');
-        ctx = this.canvas.getContext('2d');
-        this.ctx = ctx;
-        
+
         this.canvas.width = CANVAS_WIDTH;
         this.canvas.height = CANVAS_HEIGHT;
+
+        // CRT 电玩渲染层：ctx 重定向到 1/3 低分辨率缓冲（?crt=0 关闭；逻辑零改动）
+        ctx = (window.CRT ? CRT.wrap(this.canvas) : this.canvas.getContext('2d'));
+        this.ctx = ctx;
         
         // 剩余时间（ms）
         this.timeLeft = GAME_DURATION;
@@ -294,19 +300,32 @@ class Game {
                 blackHoles = blackHoles.filter(bh => !(bh.col === col && bh.row === row));
                 console.log(`[test] 清除物件 (${col},${row})`);
                 break;
-            case 'clearEnemy':
+            case 'clearEnemy': {
+                // 命中判定：怪物显示区域与点击格重叠（兼容滑动中逻辑格已提前跳到目标格、
+                // 视觉卡在两格之间的怪物——旧逻辑按 gridX/Y 精确匹配会点不中）
+                const px = OFFSET_X + col * CELL_SIZE;
+                const py = OFFSET_Y + row * CELL_SIZE;
+                let removed = 0;
                 for (let i = enemies.length - 1; i >= 0; i--) {
-                    if (enemies[i] && enemies[i].gridX === col && enemies[i].gridY === row) {
-                        console.log(`[test] 移除怪物 ${enemies[i].name} (${col},${row})`);
-                        enemies[i].alive = false;
-                        enemies[i]._killed = true;
+                    const en = enemies[i];
+                    if (!en || !en.alive) continue;
+                    const size = en.size || (CELL_SIZE - BORDER_WIDTH * 2);
+                    const hit = en.pixelX < px + CELL_SIZE && en.pixelX + size > px &&
+                                en.pixelY < py + CELL_SIZE && en.pixelY + size > py;
+                    if (hit) {
+                        console.log(`[test] 移除怪物 ${en.name} (逻辑格 ${en.gridX},${en.gridY})`);
+                        en.alive = false;
+                        en._killed = true;
                         enemies.splice(i, 1);
+                        removed++;
                     }
                 }
+                if (removed === 0) console.log(`[test] 清除怪物：(${col},${row}) 处没有怪物`);
                 break;
+            }
             // 道具：直接放置指定类型
-            case 'cherry': case 'apple': case 'peach': case 'watermelon': case 'icecream':
-            case 'time': case 'hammer': case 'heart': case 'boom':
+            case 'banana': case 'orange': case 'dragonfruit': case 'watermelon': case 'icecream':
+            case 'time': case 'hammer': case 'heart': case 'boom': case 'flip1': case 'flip2': case 'cube': case 'snowflake':
                 items.push(new Item(tool, col, row));
                 console.log(`[test] 放置道具 ${ITEM_TYPES[tool].name} (${col},${row})`);
                 break;
@@ -325,15 +344,62 @@ class Game {
             case 'KeyE': this._testTool = 'box';       break;
             case 'KeyR': this._testTool = 'wall';      break;
             case 'KeyT': this._testTool = 'hole';      break;
-            case 'KeyC': this._testTool = 'clearObj';  break;
-            case 'KeyG': this._testTool = 'clearEnemy';break;
+            case 'KeyC': {
+                // 一键清除全部物件：石头/箱子/墙/黑洞
+                if (map) {
+                    for (let r = 0; r < ROWS; r++) {
+                        for (let c = 0; c < COLS; c++) {
+                            map.stoneGrid[r][c] = false;
+                            map.boxGrid[r][c] = false;
+                            map.wallGrid[r][c] = false;
+                        }
+                    }
+                    map.boxNeverPushed.clear();
+                    // 黑洞：先恢复被 Owl 染黑的地板原色，再清空黑洞列表
+                    if (typeof blackHoles !== 'undefined') {
+                        blackHoles.forEach(bh => {
+                            if (bh && bh.prevColor && map.tiles[bh.row] && map.tiles[bh.row][bh.col]) {
+                                const t = map.tiles[bh.row][bh.col];
+                                t.color = bh.prevColor;
+                                if (bh.prevBorder) t.borderColor = bh.prevBorder;
+                            }
+                        });
+                        blackHoles.length = 0;
+                    }
+                }
+                console.log('[test] 一键清除全部物件（石头/箱子/墙/黑洞）');
+                break;
+            }
+            case 'KeyF': {
+                // 一键全场怪物硬直（测试用：方便验证硬直相关逻辑/摆拍）
+                let n = 0;
+                enemies.forEach(e => {
+                    if (e && e.alive) { e.stunned = ENEMY_STUN_DURATION; n++; }
+                });
+                console.log(`[test] 一键全场怪物硬直 ×${n}`);
+                break;
+            }
+            case 'KeyG': {
+                // 一键清除全部怪物（不进复活队列，清了就没了）
+                let n = 0;
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    const en = enemies[i];
+                    if (!en) continue;
+                    en.alive = false;
+                    en._killed = true;
+                    enemies.splice(i, 1);
+                    n++;
+                }
+                console.log(`[test] 一键清除全部怪物 ×${n}`);
+                break;
+            }
             case 'KeyI': this._cycleTestItem();        break;
             case 'Escape': case 'Backspace':
                 this._backToMenu();
                 break;
         }
         if (this._testTool) {
-            console.log(`[test] 当前工具: ${TEST_TOOL_NAMES[this._testTool]}（鼠标点击格子放置）`);
+            console.log(`[test] 当前工具: ${TEST_TOOL_NAMES[this._testTool] || this._testTool}（鼠标点击格子放置）`);
         }
     }
     
@@ -342,7 +408,7 @@ class Game {
         const idx = TEST_ITEM_TYPES.indexOf(this._testTool);
         const next = (idx + 1) % TEST_ITEM_TYPES.length;
         this._testTool = TEST_ITEM_TYPES[next];
-        console.log(`[test] 切换到道具: ${TEST_TOOL_NAMES[this._testTool]}`);
+        console.log(`[test] 切换到道具: ${TEST_TOOL_NAMES[this._testTool] || this._testTool}`);
     }
     
     loop(timestamp) {
@@ -363,6 +429,7 @@ class Game {
         if (gameInput && this.mode === 'playing') gameInput.update();
         
         this.render();
+        if (window.CRT) CRT.present();   // CRT 层上屏：NEAREST 放大 + 扫描线
         requestAnimationFrame((t) => this.loop(t));
     }
     
@@ -479,9 +546,12 @@ class Game {
             return;
         }
         
-        // 绘制地图
+        // 绘制地图（箱子拆出分层：伪 3D 深度排序，修复"箱子在玩家下方时透视玩家"的 BUG）
+        const pBottom = player ? (player.pixelY + player.height) : 0;   // 玩家 sprite 底部 y = 深度分割线
         if (map) {
-            map.draw();
+            map.draw(false);                    // 地板+石头+墙（不含箱子）
+            map.drawStampLayer();   // 猪头印平滑层：地板之上、实体之下（与 demo 两段渲染同口径）
+            map.drawBoxesSplit(pBottom, false); // 箱子远景层：格底在玩家之上（被玩家遮挡）
         }
         
         // 奖励关卡模式
@@ -515,6 +585,11 @@ class Game {
         // 绘制玩家
         if (player) {
             player.draw(this.ctx);
+        }
+
+        // 箱子近景层：格底在玩家之下（伪 3D 中离镜头更近，遮挡玩家/怪物下半身）
+        if (map) {
+            map.drawBoxesSplit(pBottom, true);
         }
         
         // 绘制倒计时（测试地图显示"测试模式"标签）
@@ -595,7 +670,7 @@ class Game {
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         
         // 通关标题
-        ctx.font = 'bold 72px Arial';
+        ctx.font = `36px ${ARCADE_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffd700';
@@ -605,7 +680,7 @@ class Game {
         ctx.fillText('CLEAR!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
         
         // 提示
-        ctx.font = 'bold 28px Arial';
+        ctx.font = `14px ${ARCADE_FONT}`;
         ctx.fillStyle = '#fff';
         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
         ctx.lineWidth = 3;
@@ -634,7 +709,7 @@ class Game {
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         
         // Game Over 标题
-        ctx.font = 'bold 72px Arial';
+        ctx.font = `36px ${ARCADE_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#e94560';
@@ -644,7 +719,7 @@ class Game {
         ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
         
         // Time's Up 提示
-        ctx.font = 'bold 28px Arial';
+        ctx.font = `14px ${ARCADE_FONT}`;
         ctx.fillStyle = '#fff';
         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
         ctx.lineWidth = 3;
@@ -667,10 +742,10 @@ class Game {
     drawLives() {
         if (!player) return;
         const ctx = this.ctx;
-        const text = `P - ${player.lives}`;
+        const text = `P-${player.lives}`;
         
         ctx.save();
-        ctx.font = 'bold 40px Arial';
+        ctx.font = `20px ${ARCADE_FONT}`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         
@@ -690,11 +765,11 @@ class Game {
     // 顶部居中倒计时（Time：XXs）
     drawTimer() {
         const seconds = Math.ceil(this.timeLeft / 1000);
-        const text = `Time：${seconds}s`;
+        const text = `TIME ${seconds}`;
         
         const ctx = this.ctx;
         ctx.save();
-        ctx.font = 'bold 40px Arial';
+        ctx.font = `20px ${ARCADE_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
@@ -725,8 +800,8 @@ class Game {
         ctx.strokeText('测试模式', x, y);
         ctx.fillText('测试模式', x, y);
         
-        // 当前工具提示
-        const toolName = this._testTool ? TEST_TOOL_NAMES[this._testTool] : '未选择工具';
+        // 当前工具提示（命名表兜底：未知工具显示键名，避免 undefined）
+        const toolName = this._testTool ? (TEST_TOOL_NAMES[this._testTool] || this._testTool) : '未选择工具';
         ctx.font = 'bold 24px Arial';
         ctx.fillStyle = this._testTool ? '#ffd700' : '#999';
         ctx.strokeStyle = 'rgba(0,0,0,0.6)';
@@ -759,14 +834,14 @@ class Game {
         // 第二行：物件
         y += 26;
         ctx.fillStyle = '#a5d9a5';
-        const line2 = '物件: [Q]石头  [E]箱子  [R]墙  [T]黑洞  [C]清物件  [G]清怪';
+        const line2 = '物件: [Q]石头 [E]箱子 [R]墙 [T]黑洞 [C]清物件 [G]清怪 [F]全硬直';
         ctx.strokeText(line2, cx, y);
         ctx.fillText(line2, cx, y);
         
         // 第三行：道具
         y += 26;
         ctx.fillStyle = '#f0a0c0';
-        const line3 = '道具: [I]循环切换(樱桃/苹果/桃子/西瓜/雪糕/沙漏/铁锤/爱心/炸弹)';
+        const line3 = '道具: [I]切换(香蕉/橙子/火龙果/西瓜/雪糕/沙漏/铁锤/爱心/炸弹/翻转卡·青/翻转卡·粉/魔方/雪花)';
         ctx.strokeText(line3, cx, y);
         ctx.fillText(line3, cx, y);
         
@@ -805,10 +880,10 @@ class Game {
     // 右上角分数显示
     drawScore() {
         const ctx = this.ctx;
-        const text = `Score: ${this.score}`;
+        const text = `${this.score}`;
         
         ctx.save();
-        ctx.font = 'bold 36px Arial';
+        ctx.font = `18px ${ARCADE_FONT}`;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffd700';
@@ -846,9 +921,9 @@ class Game {
         const types = [];
         for (let i = 0; i < 11; i++) {
             const r = Math.random();
-            if (r < 0.40) types.push('cherry');
-            else if (r < 0.53) types.push('apple');
-            else if (r < 0.67) types.push('peach');
+            if (r < 0.40) types.push('banana');
+            else if (r < 0.53) types.push('orange');
+            else if (r < 0.67) types.push('dragonfruit');
             else types.push('watermelon');
         }
         for (let i = 0; i < 11; i++) {
@@ -1046,15 +1121,15 @@ class Game {
         // 标题
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.font = 'bold 48px Arial';
+        ctx.font = `24px ${ARCADE_FONT}`;
         ctx.fillStyle = '#ffd700';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 5;
         ctx.strokeText('BONUS ROUND CLEAR!', CANVAS_WIDTH / 2, 100);
         ctx.fillText('BONUS ROUND CLEAR!', CANVAS_WIDTH / 2, 100);
         
         // 水果收集列表
-        const fruitKeys = ['cherry', 'apple', 'peach', 'watermelon', 'icecream'];
+        const fruitKeys = ['banana', 'orange', 'dragonfruit', 'watermelon', 'icecream'];
         let totalBonus = 0;
         let y = 180;
         
@@ -1082,7 +1157,7 @@ class Game {
         
         // 总分
         ctx.textAlign = 'center';
-        ctx.font = 'bold 40px Arial';
+        ctx.font = `20px ${ARCADE_FONT}`;
         ctx.fillStyle = '#ffd700';
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 4;
@@ -1108,10 +1183,10 @@ class Game {
         const ctx = this.ctx;
         ctx.save();
         ctx.textAlign = 'center';
-        ctx.font = 'bold 36px Arial';
+        ctx.font = `22px ${ARCADE_FONT}`;
         ctx.fillStyle = '#ffd700';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
         ctx.strokeText('BONUS ROUND!', CANVAS_WIDTH / 2, 80);
         ctx.fillText('BONUS ROUND!', CANVAS_WIDTH / 2, 80);
         ctx.font = '20px Arial';
@@ -1163,18 +1238,21 @@ class Game {
     // ============================================
     _renderMenu() {
         const ctx = this.ctx;
-        ctx.fillStyle = '#16213e';
+        ctx.fillStyle = '#0b0b1e';
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         
-        // 标题
+        // 标题（街机 STAGE SELECT）
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.font = 'bold 52px Arial';
+        ctx.font = `26px ${ARCADE_FONT}`;
         ctx.fillStyle = '#ffd700';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 4;
-        ctx.strokeText('关卡选择', CANVAS_WIDTH / 2, 70);
-        ctx.fillText('关卡选择', CANVAS_WIDTH / 2, 70);
+        ctx.lineWidth = 6;
+        ctx.strokeText('STAGE SELECT', CANVAS_WIDTH / 2, 56);
+        ctx.fillText('STAGE SELECT', CANVAS_WIDTH / 2, 56);
+        ctx.font = 'bold 15px Arial';
+        ctx.fillStyle = '#8ea6ff';
+        ctx.fillText('· 关 卡 选 择 ·', CANVAS_WIDTH / 2, 94);
         
         // 卡片网格：4 列 × 3 行
         const cols = 4;
@@ -1193,9 +1271,9 @@ class Game {
             const unlocked = i <= this.unlockedIndex;
             const selected = i === this.menuCursor;
             
-            // 卡片背景
-            ctx.fillStyle = unlocked ? (selected ? '#3a4d7a' : '#22314f') : '#1a1a2e';
-            ctx.strokeStyle = selected ? '#ffd700' : (unlocked ? '#4a5f8a' : '#333');
+            // 卡片背景（电玩配色：暗紫底 + 霓虹选中）
+            ctx.fillStyle = unlocked ? (selected ? '#1e2c55' : '#141b36') : '#10101f';
+            ctx.strokeStyle = selected ? '#ffd700' : (unlocked ? '#2c3a68' : '#262640');
             ctx.lineWidth = selected ? 4 : 2;
             ctx.fillRect(x, y, cardW, cardH);
             ctx.strokeRect(x, y, cardW, cardH);
@@ -1235,8 +1313,8 @@ class Game {
             const y = startY + r * (cardH + gapY);
             const selected = i === this.menuCursor;
             
-            ctx.fillStyle = selected ? '#5a3d7a' : '#2f2440';
-            ctx.strokeStyle = selected ? '#ffd700' : '#6a4f8a';
+            ctx.fillStyle = selected ? '#2c1f4d' : '#1c1530';
+            ctx.strokeStyle = selected ? '#ffd700' : '#4a3a6e';
             ctx.lineWidth = selected ? 4 : 2;
             ctx.fillRect(x, y, cardW, cardH);
             ctx.strokeRect(x, y, cardW, cardH);
@@ -1252,8 +1330,8 @@ class Game {
         }
         
         // 底部提示
-        ctx.font = '20px Arial';
-        ctx.fillStyle = '#ccc';
+        ctx.font = '15px Arial';
+        ctx.fillStyle = '#9fb3d9';
         ctx.textAlign = 'center';
         ctx.fillText('方向键选择 · Enter/空格进入 · 总分：' + this.score, CANVAS_WIDTH / 2, CANVAS_HEIGHT - 40);
     }

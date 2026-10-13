@@ -10,21 +10,26 @@ class Player {
     constructor(gridX, gridY) {
         this.gridX = gridX;
         this.gridY = gridY;
-        this.width = 66;
-        this.height = 66;
+        this.width = 88;         // 与 demo 一致：帧表 88 → 格内容域 76（CELL_SIZE - BORDER*2）
+        this.height = 88;
         
         // 素材配置
         this.useImage = false;
         this.image = null;
         this.color = '#ff4444';
 
-        // 方块猪帧表素材（v3：walk 8帧 / push 4帧 / pick 5帧，88px 单帧，原始朝右）
-        this.pigSheets = { walk: null, push: null, pushL: null, pick: null };
+        // 方块猪帧表素材（v3：walk 12帧 / push 4帧 / pick 5帧 / death 7帧，88px 单帧，原始朝右）
+        this.pigSheets = { walk: null, push: null, pushL: null, pick: null, death: null };
         this.pigReady = false;
         this._loadPigSheets();
         this.face = 'right';       // 朝向（原始帧朝右，左=镜像翻转）
         this.pickStart = 0;        // 拾取动作起始时刻（550ms 单次播放）
         this.pushStart = 0;        // 推箱动作起始时刻（260ms）
+        // 死亡链（demo 已验证口径）：晕倒→倒地(7帧@160ms)→躺平保持(1s)→模型消失→ game over
+        this.dying = false;
+        this.deathStart = 0;
+        this.deathAnim = 7 * 160;
+        this.deathLie = 1000;
         this.walkTime = 0;         // 行走帧时钟：随移动累积，与位移速度锁定（步态连贯）
         this.lastWalkAt = 0;       // 最近一次行走累积时刻（跨格衔接宽限用）
         
@@ -55,9 +60,33 @@ class Player {
     // 受到伤害（死亡一次扣除一次数值），无敌中免疫伤害
     takeDamage(amount = 1) {
         if (this.invTimer > 0) return this.lives;  // 无敌中免疫（不刷新计时器）
+        if (this.dying) return this.lives;         // 死亡动画期间不再重复扣血
         this.lives = Math.max(0, this.lives - amount);
         this.invTimer = 800;  // 受伤后 800ms 无敌
+        this._startDeath(this.lives <= 0);         // 每次死亡都播死亡动画（1.5s 后重生 / 命尽则 game over）
         return this.lives;
+    }
+
+    // 死亡链：晕倒→倒地(7帧)→躺平→模型消失
+    // isFinal=true（命耗尽）→ 链尾 game over；false（受伤重生）→ 链尾 1.5s 后生成角色
+    _startDeath(isFinal = true) {
+        this.dying = true;
+        this.deathFinal = isFinal;
+        this.deathStart = performance.now();
+        this.deathTotal = isFinal ? (this.deathAnim + this.deathLie) : 1500;   // 受伤重生链固定 1.5s
+        this.invTimer = 0;                       // 清无敌闪烁（否则死亡动画半透明闪）
+        this.isMoving = false;
+        this.move = () => false;                 // 死亡期间锁死移动
+        console.log(`[Player] 进入死亡链（${isFinal ? '最终死亡' : '受伤重生'}）`);
+    }
+
+    // 受伤死亡链结束 → 生成角色（回到起点 + 无敌）
+    _revive() {
+        this.dying = false;
+        this.deathFinal = false;
+        delete this.move;                        // 解锁移动（恢复原型方法）
+        this.respawn();
+        console.log('[Player] 死亡动画结束 → 生成角色');
     }
     
     isDead() { return this.lives <= 0; }
@@ -75,6 +104,7 @@ class Player {
             push:  '../fn-image/pig_v3_push_4.png',      // 4 帧循环，推·右
             pushL: '../fn-image/pig_v3_push_left_4.png', // 4 帧循环，推·左（镜像件）
             pick:  '../fn-image/pig_v3_pick_5.png',      // 5 帧单次，蹲下→起身
+            death: '../fn-image/pig_v3_death_7.png',     // 7 帧单次，晕倒→倒地→躺平（死亡链）
         };
         let n = 0;
         const total = Object.keys(defs).length;
@@ -91,7 +121,12 @@ class Player {
         const now = performance.now();
         const FW = 88, W = this.width, H = this.height;
         let img, frame = 0, flip = false;
-        if (this.pickStart && now - this.pickStart < 550) {          // 拾取：5 帧单次
+        if (this.dying) {                                            // 死亡链：晕倒→倒地→躺平→消失
+            const del = now - this.deathStart;
+            if (del > this.deathAnim + this.deathLie) return true;   // 模型消失（终点）
+            img = this.pigSheets.death;
+            frame = Math.min(6, Math.floor(del / 160));              // 7 帧播完停在躺平
+        } else if (this.pickStart && now - this.pickStart < 550) {   // 拾取：5 帧单次
             img = this.pigSheets.pick;
             frame = Math.min(4, Math.floor((now - this.pickStart) / 110));
         } else if (this.pushStart && now - this.pushStart < 260) {   // 推箱：4 帧循环（>滑动时长盖全程）
@@ -124,6 +159,24 @@ class Player {
         if (!isFinite(dt)) dt = 0;
         // 无敌倒计时（不移动时也要更新）
         if (this.invTimer > 0) this.invTimer = Math.max(0, this.invTimer - dt);
+        // 死亡链：晕倒→倒地→躺平→消失，链走完 → game over
+        if (this.dying) {
+            const del = performance.now() - this.deathStart;
+            if (del > this.deathTotal) {
+                if (this.deathFinal) {
+                    // 最终死亡：链尾 → game over
+                    if (game && !game.gameOver) {
+                        game.gameOver = true;
+                        if (gameInput) gameInput.enabled = false;
+                        console.log('[Player] 死亡链结束 → game over');
+                    }
+                } else {
+                    // 受伤重生：链尾 1.5s 动画结束 → 生成角色
+                    this._revive();
+                }
+            }
+            return;
+        }
         // 行走帧时钟：仅移动时累积；转向加速(boost)时步频同步加快，步幅与实际位移严格同步
         if (this.isMoving) {
             this.walkTime += dt * (this.boost || 1);
@@ -244,6 +297,8 @@ class Player {
     
     // 重生：瞬移到起点 + 无敌闪烁
     respawn() {
+        this.dying = false;                      // 保险：任何路径重生都清死亡状态、解锁移动
+        delete this.move;
         const oldX = this.gridX;
         const oldY = this.gridY;
         const oldPx = this.pixelX;
@@ -265,10 +320,24 @@ class Player {
             console.log(`[Player] 受伤，手中怪物飞出 (${g.flyDx},${g.flyDy})`);
         }
         
-        this.gridX = 3;
-        this.gridY = 2;
-        const cx = OFFSET_X + 3 * CELL_SIZE + CELL_SIZE / 2;
-        const cy = OFFSET_Y + 2 * CELL_SIZE + CELL_SIZE / 2;
+        // 默认重生点 (3,2)；若该格被黑洞占据（Owl 打洞）→ 改落到最近的非黑洞可通行格
+        let sx = 3, sy = 2;
+        if (typeof isBlackHole === 'function' && isBlackHole(3, 2)) {
+            let best = null, bestD = Infinity;
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    if (!map || !map.canMoveTo(c, r) || map.hasBox(c, r)) continue;
+                    if (typeof _isCellBlocked === 'function' && _isCellBlocked(c, r)) continue;
+                    const d = Math.abs(c - 3) + Math.abs(r - 2);
+                    if (d < bestD) { bestD = d; best = [c, r]; }
+                }
+            }
+            if (best) { sx = best[0]; sy = best[1]; }
+        }
+        this.gridX = sx;
+        this.gridY = sy;
+        const cx = OFFSET_X + sx * CELL_SIZE + CELL_SIZE / 2;
+        const cy = OFFSET_Y + sy * CELL_SIZE + CELL_SIZE / 2;
         this.pixelX = cx - this.width / 2;
         this.pixelY = cy - this.height / 2;
         this.targetPixelX = this.pixelX;
@@ -288,9 +357,9 @@ class Player {
             return;
         }
         
-        // 拾取：脚下有硬直怪物？
+        // 拾取：脚下有硬直怪物？（排除飞行中的——投掷出去的怪物不能被半路吸回来）
         if (!enemies) return;
-        const idx = enemies.findIndex(e => e && e.alive && e.stunned > 0 &&
+        const idx = enemies.findIndex(e => e && e.alive && e.stunned > 0 && !e.flying &&
             this._canPickupStunned(e));
         if (idx >= 0) {
             enemies[idx].carried = true;

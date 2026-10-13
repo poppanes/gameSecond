@@ -101,12 +101,43 @@ class Enemy {
         this.imageLoaded = false;
         this.image.src = imageSrc;
         this.image.onload = () => { this.imageLoaded = true; };
-        
+
+        // 6×8 帧表（768×576，单帧 96×96）：行=朝右/朝左/待机/硬直/朝上/朝下，列=8 帧循环
+        this.sheetImg = null;
+        this.sheetLoaded = false;
+        this.sheetFrameN = 8;
+        this.sheetFrameMs = 120;   // 8 帧循环 ≈ 1s
+        this.lastDirRow = 2;       // 最后移动方向行（静止时定格该行第 0 帧，保持朝向）
+
         // 硬直素材（玩家翻转击杀时显示）
         this.deathImage = new Image();
         this.deathImageLoaded = false;
         this.deathImage.src = '../fn-image/ghost_death.png';
         this.deathImage.onload = () => { this.deathImageLoaded = true; };
+    }
+
+    // 加载 6×8 帧表（加载完成后 draw 优先走帧表渲染）
+    setFrames(src) {
+        this.sheetImg = new Image();
+        this.sheetImg.onload = () => { this.sheetLoaded = true; };
+        this.sheetImg.src = src + '?v=' + Date.now();   // cache-bust：换图立即生效
+    }
+
+    // 投掷落定：收回界内最近格，保持硬直（躺地，可再被拾取/等硬直恢复行动）
+    _landStunned() {
+        this.flying = false;
+        this.bouncing = false;
+        const cx = Math.max(0, Math.min(COLS - 1, Math.round((this.pixelX - OFFSET_X) / CELL_SIZE)));
+        const cy = Math.max(0, Math.min(ROWS - 1, Math.round((this.pixelY - OFFSET_Y) / CELL_SIZE)));
+        this.gridX = cx;
+        this.gridY = cy;
+        this.pixelX = OFFSET_X + cx * CELL_SIZE + BORDER_WIDTH;
+        this.pixelY = OFFSET_Y + cy * CELL_SIZE + BORDER_WIDTH;
+        this.targetPixelX = this.pixelX;
+        this.targetPixelY = this.pixelY;
+        this.isMoving = false;
+        this.stunned = Math.max(this.stunned, 2000);   // 落地硬直至少 2s（拾取期间计时冻结，此处保底）
+        console.log(`[enemy] ${this.name} 投掷落地，保持硬直 (${cx},${cy})`);
     }
 
     // 判断格子是否可通行（避开石头/箱子/墙/黑洞）
@@ -192,27 +223,35 @@ class Enemy {
                 this.gridY = cy;
             }
             
-            // 飞出地图边缘 → 消失
-            if (this.pixelX < OFFSET_X - CELL_SIZE || 
+            // 飞出地图边缘 → 投掷怪落地保持硬直；被撞飞的反弹出界仍死亡
+            if (this.pixelX < OFFSET_X - CELL_SIZE ||
                 this.pixelX > OFFSET_X + COLS * CELL_SIZE ||
                 this.pixelY < OFFSET_Y - CELL_SIZE ||
                 this.pixelY > OFFSET_Y + ROWS * CELL_SIZE) {
-                this.alive = false;  // game.js 清理循环会调用 killEnemy 入复活队列
-                console.log(`[enemy] 飞行出地图外，等待复活`);
+                // 飞出地图边缘 → 死亡（投掷/被撞飞统一：进复活队列正常重生）
+                this.alive = false;
+                console.log(`[enemy] 飞出地图外，等待复活`);
                 return;
             }
-            
-            // 撞障碍物 → 消失
-            if (cx >= 0 && cx < COLS && cy >= 0 && cy < ROWS) {
-                // 撞到其他怪物（遍历所有同格怪物，避免只处理第一只） → 被撞的全部撞飞出地图
-                const hitEnemies = enemies.filter(e => e !== this && e.alive && e.stunned <= 0 && 
+
+            // 仅当进入新格子时判定撞击（起飞格跳过：防止起飞瞬间撞到脚下躺地怪导致投掷反弹失败）
+            const cellKey = cx + ',' + cy;
+            if (this._lastFlyCell === undefined) this._lastFlyCell = cellKey;
+            const isNewCell = cellKey !== this._lastFlyCell;
+            if (isNewCell) this._lastFlyCell = cellKey;
+
+            // 撞障碍物 → 投掷怪落地保持硬直（贴着障碍前一格）
+            if (isNewCell && cx >= 0 && cx < COLS && cy >= 0 && cy < ROWS) {
+                // 撞到其他怪物（含硬直躺地的，一起撞飞出地图；排除玩家手中举着的） → 被撞的全部撞飞出地图
+                const hitEnemies = enemies.filter(e => e !== this && e.alive && !e.carried && 
                     e.gridX === cx && e.gridY === cy);
                 if (hitEnemies.length > 0) {
                     hitEnemies.forEach(hitEnemy => {
                         console.log(`[enemy] ${this.name} 飞行撞到 ${hitEnemy.name}(${cx},${cy}) → 撞飞`);
-                        // 被撞怪物：斜上飞出 + 高速撞飞效果
+                        // 被撞怪物：斜上飞出 + 高速撞飞效果（bouncing=true → 反弹出界走"死亡+复活"，不视为投掷消灭）
                         hitEnemy.carried = false;
                         hitEnemy.flying = true;
+                        hitEnemy.bouncing = true;
                         hitEnemy.moveSpeed = THROW_FLY_SPEED;
                         hitEnemy.flyDx = this.flyDx;
                         hitEnemy.flyDy = this.flyDy === 0 ? -1 : this.flyDy * 2;
@@ -235,16 +274,14 @@ class Enemy {
                             console.log(`[enemy] ${hitEnemy.name} 在边缘，立即推过`);
                         }
                     });
-                    // 当前怪物减速反弹 + 抛物线飞出
-                    this.flyDx *= -0.5;
-                    this.flyDy = -1.5;  // 初始向上冲，配合重力产生抛物线
-                    this.bouncing = true;
+                    // 投掷怪保持原方向继续飞行（与被撞怪一起飞出地图，出界统一死亡+复活）——不再反弹
                     return;
                 }
-                // 撞到石头/箱子/墙
+                // 撞到石头/箱子/墙 → 落地保持硬直（贴障碍前一格，不进入障碍格）
                 if (map && (map.hasStone(cx, cy) || map.hasBox(cx, cy) || map.hasWall(cx, cy))) {
-                    this.alive = false;
-                    console.log(`[enemy] 飞行撞障碍(${cx},${cy})，等待复活`);
+                    this.pixelX -= this.flyDx * 20;
+                    this.pixelY -= this.flyDy * 20;
+                    this._landStunned();
                     return;
                 }
             }
@@ -337,15 +374,61 @@ class Enemy {
         if (!player || !player.takeDamage) return;
         if (player.invTimer > 0) return;  // 无敌中直接跳过
         player.takeDamage(1);
+        if (player.dying) return;         // 最终死亡：播死亡链（晕倒→倒地→躺平→消失），链尾由 player.update 触发 game over
         player.respawn();
-        if (player.isDead()) {
-            game.gameOver = true;
-            if (gameInput) gameInput.enabled = false;
-        }
     }
 
     /* ---- 绘制 ---- */
     draw(ctx) {
+        if (!this.alive) return;
+        // 6×8 帧表渲染（加载完成后优先）：行=朝右/朝左/待机/硬直/朝上/朝下
+        if (this.sheetLoaded) {
+            const F = 96;
+            const f = Math.floor(performance.now() / this.sheetFrameMs) % this.sheetFrameN;
+            // 行选择：硬直→3；移动中按位移向量更新最后朝向（阈值 0.5 防 tie 误判）；
+            // 静止→播待机行动画（呼吸），水平镜像匹配最后朝向（待机帧固有朝向=朝右系）
+            let row, frame, flipH = false;
+            if (this.stunned > 0) {
+                row = 3;
+                frame = f;
+            } else if (this.flying || this.bouncing) {
+                // 投掷飞行/反弹：朝飞行方向（flyDx/flyDy），帧循环=扑腾挣扎感
+                if (Math.abs(this.flyDx) > Math.abs(this.flyDy)) this.lastDirRow = this.flyDx > 0 ? 0 : 1;
+                else if (this.flyDy !== 0) this.lastDirRow = this.flyDy > 0 ? 5 : 4;
+                row = this.lastDirRow;
+                frame = f;
+            } else if (this.isMoving) {
+                const dx = this.targetPixelX - this.pixelX;
+                const dy = this.targetPixelY - this.pixelY;
+                if (Math.abs(dx) > 0.5) this.lastDirRow = dx > 0 ? 0 : 1;
+                else if (Math.abs(dy) > 0.5) this.lastDirRow = dy > 0 ? 5 : 4;
+                row = this.lastDirRow;
+                frame = f;
+            } else {
+                row = 2;
+                frame = f;
+                flipH = this.lastDirRow === 1;   // 最后朝左 → 镜像待机帧
+            }
+            // 复活预警 → 频闪；硬直后半程闪烁提示即将恢复
+            if (this.warning > 0 && Math.floor(this.warning / 150) % 2 === 0) ctx.globalAlpha = 0.25;
+            if (this.stunned > 0 && this.stunned < ENEMY_STUN_DURATION / 2 &&
+                Math.floor(this.stunned / 120) % 2 === 0) ctx.globalAlpha = 0.4;
+            ctx.imageSmoothingEnabled = false;   // 像素帧表硬边缩放
+            // 帧表 96 原生 1:1 绘制（零缩放零失真）：帧内 BODY 88 居中，格心对齐后 BODY 恰满整格 88
+            const dx0 = this.pixelX + this.size / 2 - F / 2;   // 格中心 - 半帧 = 帧左上
+            const dy0 = this.pixelY + this.size / 2 - F / 2;
+            if (flipH) {
+                ctx.save();
+                ctx.translate(dx0 + F, dy0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(this.sheetImg, frame * F, row * F, F, F, 0, 0, F, F);
+                ctx.restore();
+            } else {
+                ctx.drawImage(this.sheetImg, frame * F, row * F, F, F, dx0, dy0, F, F);
+            }
+            ctx.globalAlpha = 1;
+            return;
+        }
         if (!this.alive) return;
         // 复活预警 → 频闪
         if (this.warning > 0 && this.imageLoaded) {
@@ -377,6 +460,7 @@ class Enemy {
 class Ghost extends Enemy {
     constructor(col, row) {
         super(col, row, '../fn-image/ghost_base_extracted.png', 'Ghost');
+        this.setFrames('../fn-image/ghost_sheet.png');   // 6×8 帧表（素材包定版）
         this._targetCache = null;
     }
 
@@ -444,14 +528,14 @@ class Ghost extends Enemy {
                 this.moveCooldown = getBoostedInterval(ENEMY_FLIP_DELAY) + 400;
                 return;
             }
-            // 其次：寻路到远处的已翻转地板
+            // 其次：寻路到远处的已翻转地板 / 玩家
             const dir = this.findPath();
             if (dir) {
                 const nx = this.gridX + dir.dx;
                 const ny = this.gridY + dir.dy;
-                // 下一格有箱子或被怪物占据 → 不走
-                if ((map && map.hasBox(nx, ny)) || _isCellBlocked(nx, ny, this)) {
-                    this.moveCooldown = 400;
+                // 下一格有箱子/被怪物占据/是黑洞 → 改为自由游荡（不原地罚站）
+                if ((map && map.hasBox(nx, ny)) || _isCellBlocked(nx, ny, this) || isBlackHole(nx, ny)) {
+                    this._wanderRandomly();
                     return;
                 }
                 this.gridX = nx;
@@ -459,8 +543,29 @@ class Ghost extends Enemy {
                 this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
                 this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
                 this.isMoving = true;
+            } else {
+                // 无任何目标（无翻板格且玩家不可达/同格）→ 自由游荡
+                this._wanderRandomly();
             }
         }
+    }
+
+    /* ---- 自由游荡：随机走一步（避开黑洞/障碍/怪物），节奏比追击慢 ---- */
+    _wanderRandomly() {
+        const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+        const valid = dirs.filter(([dx,dy]) => {
+            const nx = this.gridX + dx, ny = this.gridY + dy;
+            return nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && map &&
+                !map.hasStone(nx, ny) && !map.hasBox(nx, ny) && !map.hasWall(nx, ny) &&
+                !isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this);
+        });
+        if (valid.length === 0) { this.moveCooldown = 400; return; }   // 完全被困，稍后重试
+        const [dx, dy] = valid[Math.floor(Math.random() * valid.length)];
+        this.gridX += dx; this.gridY += dy;
+        this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+        this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+        this.isMoving = true;
+        this.moveCooldown = getBoostedInterval(2500);   // 游荡节奏：每秒最多走一格（悠闲感）
     }
 
     /* 只翻当前行：脚下 → 左边邻格 → 右边邻格（一次一个，不跨行，跳过箱子） */
@@ -616,6 +721,7 @@ class Ghost extends Enemy {
 class Spider extends Enemy {
     constructor(col, row) {
         super(col, row, '../fn-image/spider.png', 'Spider');
+        this.setFrames('../fn-image/spider_sheet.png');   // 6×8 帧表（素材包定版）
         this.moveSpeed = ENEMY_MOVE_SPEED * 0.5;  // 比 Ghost 慢一半
         this.moveTimer = 0;
         this.flipTimer = 0;
@@ -692,6 +798,7 @@ class Spider extends Enemy {
 class Snowman extends Enemy {
     constructor(col, row) {
         super(col, row, '../fn-image/snowmen.png', 'Snowman');
+        this.setFrames('../fn-image/snowman_sheet.png');   // 6×8 帧表（素材包定版）
         // 出生即狂暴状态
         this.rage = true;
         this.rageTimer = SNOWMAN_RAGE_DURATION;
@@ -755,7 +862,7 @@ class Snowman extends Enemy {
             if (dir) {
                 const nx = this.gridX + dir.dx;
                 const ny = this.gridY + dir.dy;
-                if (!_isCellBlocked(nx, ny, this)) {
+                if (!isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this)) {
                     this.gridX += dir.dx; this.gridY += dir.dy;
                     this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
                     this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
@@ -771,7 +878,7 @@ class Snowman extends Enemy {
                 if (dir) {
                     const nx = this.gridX + dir.dx;
                     const ny = this.gridY + dir.dy;
-                    if (!_isCellBlocked(nx, ny, this)) {
+                    if (!isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this)) {
                         this.gridX += dir.dx; this.gridY += dir.dy;
                         this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
                         this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
@@ -849,6 +956,7 @@ class Snowman extends Enemy {
 class Octopus extends Enemy {
     constructor(col, row) {
         super(col, row, '../fn-image/octopus.png', 'Octopus');
+        this.setFrames('../fn-image/octopus_sheet.png');   // 6×8 帧表（素材包定版）
         this.moveSpeed = ENEMY_MOVE_SPEED * 1.6;  // 快速
         this.moveTimer = 0;
         this.flipTimer = 0;
@@ -973,6 +1081,7 @@ class Octopus extends Enemy {
 class Owl extends Enemy {
     constructor(col, row) {
         super(col, row, '../fn-image/owl.png', 'Owl');
+        this.setFrames('../fn-image/owl_sheet.png');   // 6×8 帧表（素材包定版）
         this.moveSpeed = ENEMY_MOVE_SPEED * 1.0;  // 正常速度
         this.moveTimer = 0;
         this.jumpTimer = OWL_JUMP_INTERVAL;
@@ -1005,8 +1114,8 @@ class Owl extends Enemy {
         this.jumpTimer -= dt;
         if (this.jumpTimer <= 0) {
             this.jumpTimer = getBoostedInterval(OWL_JUMP_INTERVAL);
-            // 在脚下跳跃打洞 → 黑洞（前提：至少还有一个方向可走，避免自困）
-            if (map && !isBlackHole(this.gridX, this.gridY) && this._hasEscape()) {
+            // 在脚下跳跃打洞 → 黑洞（前提：脚下无玩家/其他怪物，且至少还有一个方向可走，避免自困）
+            if (map && !isBlackHole(this.gridX, this.gridY) && !this._cellHasActor() && this._hasEscape()) {
                 const t = map.tiles[this.gridY][this.gridX];
                 blackHoles.push({
                     col: this.gridX, row: this.gridY, owner: this,
@@ -1081,6 +1190,14 @@ class Owl extends Enemy {
             const nx=this.gridX+dx, ny=this.gridY+dy;
             return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && this._canPass(nx,ny);
         });
+    }
+
+    // 脚下格是否站着玩家或其他怪物（黑洞格不允许有任何角色，防止打洞把人"吞进"黑洞）
+    _cellHasActor() {
+        if (player && typeof player.isDead === 'function' && !player.isDead() &&
+            player.gridX === this.gridX && player.gridY === this.gridY) return true;
+        return enemies.some(e => e && e !== this && e.alive && !e.flying && !e.carried &&
+            e.gridX === this.gridX && e.gridY === this.gridY);
     }
 }
 
@@ -1236,6 +1353,11 @@ function processRespawn(dt) {
         respawnQueue[i].timer -= dt;
         if (respawnQueue[i].timer <= ENEMY_WARNING_TIME && !respawnQueue[i].spawned) {
             const rq = respawnQueue[i];
+            // 出生点被黑洞占据（Owl 打洞）→ 暂不复活，推迟重试直到黑洞消失（黑洞内不允许有任何角色）
+            if (typeof isBlackHole === 'function' && isBlackHole(rq.col, rq.row)) {
+                rq.timer += 200;   // 顶回阈值上方，约 200ms 后重试
+                continue;
+            }
             rq.spawned = true;
             if (rq.type === 'Ghost') {
                 const g = new Ghost(rq.col, rq.row); g.warning = rq.timer; enemies.push(g);

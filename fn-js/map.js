@@ -1,6 +1,21 @@
 // ============================================
 // 地图类
 // ============================================
+// 魔方连锁波浪翻转的半径（格），与 demo「连锁波浪翻转」一致（3.2）
+const WAVE_RADIUS = 3.2;
+// 波浪每远一格的递增延迟(ms)——与 demo 保持一致（55）；不占用全局 FLIP_DELAY/RIPPLE_STEP，避免影响翻线/翻转卡
+const WAVE_STEP = 55;
+
+// 未翻格流光边框（对标金铲铲入场 GIF，demo_border_flow.html 同参数）
+// 色相场：hue = HUE_BASE + sin(u*SPACE_X + v*SPACE_Y + t*FLOW_SPD) * HUE_AMP（青 190 ~ 品红 300 流动）
+const FLOW_HUE_BASE = 236;
+const FLOW_HUE_AMP  = 62;
+const FLOW_SPD      = 1.35;
+const FLOW_SPACE_X  = 0.42;
+const FLOW_SPACE_Y  = 0.55;
+const FLOW_GLOW_W   = 9;     // 光晕层线宽
+const FLOW_CORE_W   = 3.2;   // 白芯层线宽
+
 class Map {
     constructor(ctx) {
         this.ctx = ctx;
@@ -12,22 +27,39 @@ class Map {
         this.offsetY = OFFSET_Y;
         
         // 地图样式配置
-        this.bgColor = '#16213e';
-        this.cellColor = '#fffbff';
-        this.borderColor = '#a5a2a5';
+        this.bgColor = '#0b0b1e';          // 电玩风：深紫黑底
+        this.cellColor = '#eafcff';        // 未翻：冰白（微青）
+        this.borderColor = '#2f7fd6';      // 未翻边框：霓虹蓝
         
         // 地形配置（后续扩展）
         this.tiles = this.createDefaultTiles();
         
         // 翻转后颜色
-        this.flippedColor = '#a5a2a5';
-        this.flippedBorderColor = '#525152';
+        this.flippedColor = '#232848';     // 已翻：暗紫
+        this.flippedBorderColor = '#101326';
+
+        // 地板贴图：未翻 = 冰白素面（floor_front）/ 已翻 = 蓝紫底+青霓虹边（floor_back）
+        // 猪头印 = 独立平滑层（pig_stamp_smooth），只叠在已翻格上，见 drawStampLayer()
+        this.floorFront = new Image();
+        this.floorFrontLoaded = false;
+        this.floorFront.src = '../fn-image/floor_front.png';
+        this.floorFront.onload = () => { this.floorFrontLoaded = true; };
+        this.floorBack = new Image();
+        this.floorBackLoaded = false;
+        this.floorBack.src = '../fn-image/floor_back.png';
+        this.floorBack.onload = () => { this.floorBackLoaded = true; };
+        this.pigStamp = new Image();
+        this.pigStampLoaded = false;
+        this.pigStamp.src = '../fn-image/pig_stamp_smooth.png';
+        this.pigStamp.onload = () => { this.pigStampLoaded = true; };
         
         // 箱子系统
         this.boxImage = new Image();
         this.boxImageLoaded = false;
-        this.boxImage.src = '../fn-image/00.png';
+        this.boxImage.src = '../fn-image/00_fx.png';   // 机台满格动画帧表 704x88 = 8 帧 @12fps
         this.boxImage.onload = () => { this.boxImageLoaded = true; };
+        this.boxFrameN = 8;                            // 动画帧数
+        this.boxFrameMs = 1000 / 12;                   // 12fps（定版口径）
         this.boxGrid = this.createBoxGrid();
         this.boxNeverPushed = new Set();  // 未被推动的箱子所在格，不计入通关
         
@@ -314,14 +346,10 @@ class Map {
             this.boxGrid[newRow][newCol] = true;
             
             if (pNextOutOfBounds || pNextStone || pNextBox || pNextHole) {
-                // 玩家被推到边界/石头/箱子/黑洞 → 扣1条命
+                // 玩家被推到边界/石头/箱子/黑洞 → 扣1条命（死亡动画由死亡链统一处理：1.5s 后重生 / 命尽 game over）
                 player.invTimer = 0;
                 player.takeDamage(1);
-                player.respawn();
                 console.log(`[pushBox] → 箱子把玩家推出 (${pNextCol},${pNextRow}) 玩家受伤,生命:${player.lives}`);
-                if (player.isDead()) {
-                    if (game) { game.gameOver = true; if (gameInput) gameInput.enabled = false; }
-                }
             } else {
                 // 玩家被推到下一格（无伤害）
                 player.gridX = pNextCol;
@@ -522,18 +550,20 @@ class Map {
             }
         }
         if (exempt.length > 0) {
-            console.log(`[areAllFlipped] 豁免: ${exempt.join(' ')} (共${exempt.length}格)`);
+            // console.log(`[areAllFlipped] 豁免: ${exempt.join(' ')} (共${exempt.length}格)`);   // 通关检测每帧调用，屏蔽防刷屏
         }
         if (unflipped.length > 0) {
-            console.log(`[areAllFlipped] 需翻转: ${unflipped.join(' ')} (共${unflipped.length}格)`);
+            // console.log(`[areAllFlipped] 需翻转: ${unflipped.join(' ')} (共${unflipped.length}格)`);
             return false;
         }
-        console.log(`[areAllFlipped] ✅ 全部翻转完成！`);
+        // console.log(`[areAllFlipped] ✅ 全部翻转完成！`);
         return true;
     }
     
     // 检查格子是否已翻转（用颜色判定，杜绝 flipped 不同步问题）
+    // 注意：黑洞格颜色为 #000（Owl 打洞），若不排除会被怪物误判为"已翻转地板"而寻路走进黑洞
     isTileFlipped(col, row) {
+        if (typeof isBlackHole === 'function' && isBlackHole(col, row)) return false;
         if (col >= 0 && col < this.cols && row >= 0 && row < this.rows) {
             return this.tiles[row][col].color !== this.cellColor;
         }
@@ -581,39 +611,154 @@ class Map {
     }
     
     // 绘制地图
-    draw() {
+    draw(includeBoxes = true) {
         this.drawBackground();
-        this.drawTiles();
+        this.drawTiles(includeBoxes);
     }
-    
+
     // 绘制背景
     drawBackground() {
         this.ctx.fillStyle = this.bgColor;
         this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
-    
+
     // 绘制所有格子
-    drawTiles() {
+    // includeBoxes=false 时不画箱子（供渲染层做伪 3D 深度拆分：箱子按与玩家的前后关系分两层绘制）
+    drawTiles(includeBoxes = true) {
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
                 this.drawTile(col, row);
             }
         }
+        this.drawFlowGrid();   // 未翻格流光边框（整网渲染，替代逐格 strokeRect）
         this.drawStones();
-        this.drawBoxes();
+        if (includeBoxes) this.drawBoxes();
         this.drawWalls();
     }
+
+    // 流光网格边框（对标金铲铲 GIF / demo_border_flow.html 同参数）：
+    // 只画"至少一侧是未翻格"的网格线段；hue 场基于格点坐标连续 → 相邻段颜色自然衔接
+    drawFlowGrid() {
+        const t = performance.now() / 1000;
+        const hue = (i, j) => FLOW_HUE_BASE + Math.sin(i * FLOW_SPACE_X + j * FLOW_SPACE_Y + t * FLOW_SPD) * FLOW_HUE_AMP;
+        const hsl = (h, l, a) => "hsla(" + (((h % 360) + 360) % 360).toFixed(1) + ",95%," + (l * 100) + "%," + a + ")";
+        const open = (c, r) => c >= 0 && c < this.cols && r >= 0 && r < this.rows &&
+                               this.tiles[r][c].color === this.cellColor;   // 未翻格
+        const passes = [
+            { w: FLOW_GLOW_W, l: 0.55, a: 0.45 },   // 光晕层
+            { w: FLOW_CORE_W, l: 0.78, a: 1.00 },   // 白芯层
+        ];
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.lineCap = "round";
+        for (const P of passes) {
+            ctx.lineWidth = P.w;
+            // 横向线段：格点行 r(0..rows) × 列段 c
+            for (let r = 0; r <= this.rows; r++) {
+                for (let c = 0; c < this.cols; c++) {
+                    if (!open(c, r) && !open(c, r - 1)) continue;   // 两侧都非未翻 → 不画
+                    const g = ctx.createLinearGradient(
+                        this.offsetX + c * this.cellSize, this.offsetY + r * this.cellSize,
+                        this.offsetX + (c + 1) * this.cellSize, this.offsetY + r * this.cellSize);
+                    g.addColorStop(0, hsl(hue(c, r), P.l, P.a));
+                    g.addColorStop(1, hsl(hue(c + 1, r), P.l, P.a));
+                    ctx.strokeStyle = g;
+                    ctx.beginPath();
+                    ctx.moveTo(this.offsetX + c * this.cellSize + (c === 0 ? 2 : 0),
+                               this.offsetY + r * this.cellSize);
+                    ctx.lineTo(this.offsetX + (c + 1) * this.cellSize - (c === this.cols - 1 ? 2 : 0),
+                               this.offsetY + r * this.cellSize);
+                    ctx.stroke();
+                }
+            }
+            // 纵向线段：格点列 c(0..cols) × 行段 r
+            for (let c = 0; c <= this.cols; c++) {
+                for (let r = 0; r < this.rows; r++) {
+                    if (!open(c, r) && !open(c - 1, r)) continue;
+                    const g = ctx.createLinearGradient(
+                        this.offsetX + c * this.cellSize, this.offsetY + r * this.cellSize,
+                        this.offsetX + c * this.cellSize, this.offsetY + (r + 1) * this.cellSize);
+                    g.addColorStop(0, hsl(hue(c, r), P.l, P.a));
+                    g.addColorStop(1, hsl(hue(c, r + 1), P.l, P.a));
+                    ctx.strokeStyle = g;
+                    ctx.beginPath();
+                    ctx.moveTo(this.offsetX + c * this.cellSize,
+                               this.offsetY + r * this.cellSize + (r === 0 ? 2 : 0));
+                    ctx.lineTo(this.offsetX + c * this.cellSize,
+                               this.offsetY + (r + 1) * this.cellSize - (r === this.rows - 1 ? 2 : 0));
+                    ctx.stroke();
+                }
+            }
+        }
+        ctx.restore();
+    }
     
-    // 绘制所有石头
+    // 十字翻转（翻转卡·粉）：自身 + 上下左右四邻（障碍格跳过）
+    flipCross(col, row) {
+        const cells = [{ col, row, playerTile: true, dist: 0 }];
+        [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(([dc, dr], i) => {
+            const c = col + dc, r = row + dr;
+            if (c < 0 || c >= this.cols || r < 0 || r >= this.rows) return;
+            if (this.boxGrid[r][c] || this.stoneGrid[r][c] || this.wallGrid[r][c]) return;
+            if (typeof isBlackHole === 'function' && isBlackHole(c, r)) return;
+            cells.push({ col: c, row: r, playerTile: false, dist: 1 + i * 0.2 });
+        });
+        cells.forEach(({ col, row, playerTile, dist }) => {
+            const tile = this.tiles[row][col];
+            const oldColor = tile.color;
+            const oldBorder = tile.borderColor;
+            let newColor, newBorder;
+            if (playerTile) {
+                const isFlipped = tile.color !== this.cellColor;
+                newColor = isFlipped ? this.cellColor : this.flippedColor;
+                newBorder = isFlipped ? this.borderColor : this.flippedBorderColor;
+            } else {
+                newColor = this.flippedColor;
+                newBorder = this.flippedBorderColor;
+            }
+            const delay = FLIP_DELAY + dist * RIPPLE_STEP;
+            addPendingFlip(col, row, oldColor, oldBorder, newColor, newBorder, playerTile, delay, true);
+        });
+    }
+
+    // 连锁波浪翻转（魔方）：以中心格为原点，半径 WAVE_RADIUS 格内按欧氏距离递增延迟依次翻转
+    // 障碍格（箱/石/墙/黑洞）跳过；中心格取 toggle，其余统一翻成已翻色
+    flipWave(col, row) {
+        const R = WAVE_RADIUS;
+        let cells = 0;
+        for (let r = row - Math.ceil(R); r <= row + Math.ceil(R); r++) {
+            if (r < 0 || r >= this.rows) continue;
+            for (let c = col - Math.ceil(R); c <= col + Math.ceil(R); c++) {
+                if (c < 0 || c >= this.cols) continue;
+                const d = Math.hypot(c - col, r - row);
+                if (d > R) continue;
+                if (this.boxGrid[r][c] || this.stoneGrid[r][c] || this.wallGrid[r][c]) continue;
+                if (typeof isBlackHole === 'function' && isBlackHole(c, r)) continue;
+                const tile = this.tiles[r][c];
+                const oldColor = tile.color;
+                const oldBorder = tile.borderColor;
+                // 与 demo onFlipLand 一致：每格都取反（已翻的翻回白格，未翻的翻成暗紫）
+                const isFlipped = tile.color !== this.cellColor;
+                const newColor = isFlipped ? this.cellColor : this.flippedColor;
+                const newBorder = isFlipped ? this.borderColor : this.flippedBorderColor;
+                addPendingFlip(c, r, oldColor, oldBorder, newColor, newBorder, isFlipped,
+                               d * WAVE_STEP, true);
+                cells++;
+            }
+        }
+        console.log(`[Item] 魔方连锁波浪：中心(${col},${row}) 半径 ${R} 格 → ${cells} 格依次翻转`);
+        return cells;
+    }
+
+    // 绘制所有石头（满格：88 素材整格覆盖，偏移 0，连边框区一起盖住）
     drawStones() {
         if (!this.stoneImageLoaded) return;
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
                 if (this.stoneGrid[row][col]) {
-                    const x = this.offsetX + col * this.cellSize + this.borderWidth;
-                    const y = this.offsetY + row * this.cellSize + this.borderWidth;
-                    const size = this.cellSize - this.borderWidth * 2;
-                    this.ctx.drawImage(this.stoneImage, x, y, size, size);
+                    const x = this.offsetX + col * this.cellSize;
+                    const y = this.offsetY + row * this.cellSize;
+                    this.ctx.drawImage(this.stoneImage, x, y, this.cellSize, this.cellSize);
                 }
             }
         }
@@ -630,13 +775,26 @@ class Map {
             }
         }
     }
+
+    // 箱子伪 3D 深度分层绘制：above=true 画"格底 >= thresholdY"的近景箱（遮挡玩家下半身）；
+    // above=false 画"格底 < thresholdY"的远景箱（被玩家遮挡）。thresholdY = 玩家 sprite 底部 y（绝对屏幕坐标）
+    drawBoxesSplit(thresholdY, above) {
+        if (!this.boxImageLoaded) return;
+        for (let row = 0; row < this.rows; row++) {
+            const boxBottom = this.offsetY + (row + 1) * this.cellSize;   // 绝对屏幕坐标，与 thresholdY 同基准
+            if ((boxBottom >= thresholdY) !== above) continue;
+            for (let col = 0; col < this.cols; col++) {
+                if (this.boxGrid[row][col]) this.drawBox(col, row);
+            }
+        }
+    }
     
-    // 绘制单个箱子（占满格子内部）
+    // 绘制单个箱子（满格 88 + 屏幕动画：帧表 8 帧 @12fps 循环）
     drawBox(col, row) {
-        const x = this.offsetX + col * this.cellSize + this.borderWidth;
-        const y = this.offsetY + row * this.cellSize + this.borderWidth;
-        const size = this.cellSize - this.borderWidth * 2;
-        this.ctx.drawImage(this.boxImage, x, y, size, size);
+        const x = this.offsetX + col * this.cellSize;
+        const y = this.offsetY + row * this.cellSize;
+        const f = Math.floor(performance.now() / this.boxFrameMs) % this.boxFrameN;
+        this.ctx.drawImage(this.boxImage, f * this.cellSize, 0, this.cellSize, this.cellSize, x, y, this.cellSize, this.cellSize);
     }
     
     // 绘制所有墙（空气墙）
@@ -678,14 +836,71 @@ class Map {
         const x = this.offsetX + col * this.cellSize;
         const y = this.offsetY + row * this.cellSize;
         const tile = this.tiles[row][col];
-        
-        // 格子填充
-        this.ctx.fillStyle = tile.color;
-        this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
-        
-        // 边框
-        this.ctx.strokeStyle = tile.borderColor;
-        this.ctx.lineWidth = this.borderWidth;
-        this.ctx.strokeRect(x, y, this.cellSize, this.cellSize);
+        const isFlipped = tile.color !== this.cellColor;
+
+        if (!isFlipped) {
+            // 未翻格：贴冰白素面 + 方形同心深紫渐变（与 demo drawArcadeTileFace 未翻分支同口径）
+            if (this.floorFrontLoaded) {
+                this.ctx.drawImage(this.floorFront, x, y, this.cellSize, this.cellSize);
+            } else {
+                this.ctx.fillStyle = tile.color;
+                this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+            }
+            // 方形同心渐变：由外向内 18 层矩形插值（等值线贴合方形边框）
+            const w = this.cellSize, h = this.cellSize;
+            const cx2 = x + w * 0.5, cy2 = y + h * 0.5;
+            const C_IN  = [65, 18, 150];   // 中心·深紫（#41129A）
+            const C_OUT = [72,  0, 128];   // 边缘·深紫（#480080）
+            const SQ_LAYERS = 18;
+            for (let i = 0; i < SQ_LAYERS; i++) {
+                const f = i / (SQ_LAYERS - 1);            // 0(最外) → 1(最内)
+                const s = f * f * (3 - 2 * f);            // smoothstep
+                const scale = 1 - f * 0.98;
+                const halfW = (w * 0.5) * scale;
+                const halfH = (h * 0.5) * scale;
+                const rr = Math.round(C_OUT[0] + (C_IN[0] - C_OUT[0]) * s);
+                const gg = Math.round(C_OUT[1] + (C_IN[1] - C_OUT[1]) * s);
+                const bb = Math.round(C_OUT[2] + (C_IN[2] - C_OUT[2]) * s);
+                this.ctx.fillStyle = 'rgba(' + rr + ',' + gg + ',' + bb + ',1.00)';
+                this.ctx.fillRect(cx2 - halfW, cy2 - halfH, halfW * 2, halfH * 2);
+            }
+        } else {
+            // 已翻格：蓝紫底 + 青霓虹边贴图；未加载回退程序绘制
+            if (this.floorBackLoaded) {
+                this.ctx.drawImage(this.floorBack, x, y, this.cellSize, this.cellSize);
+            } else {
+                this.ctx.fillStyle = tile.color;
+                this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+            }
+        }
+
+        // 边框：已翻格保留描边（贴图外沿强调）；未翻格由 drawFlowGrid 流光线替代
+        if (isFlipped) {
+            this.ctx.strokeStyle = tile.borderColor;
+            this.ctx.lineWidth = this.borderWidth;
+            this.ctx.strokeRect(x, y, this.cellSize, this.cellSize);
+        }
+    }
+
+    // 猪头印平滑层：只叠在"已翻格"上（与 demo drawStampOverlay 同口径）
+    // 用平滑缩放 + 同色柔阴影，让 1px 细线在实机读起来实心；猪头印不随像素格缩放
+    drawStampLayer() {
+        if (!this.pigStampLoaded) return;
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.globalAlpha = 0.95;
+        ctx.shadowColor = 'rgba(97,159,204,0.90)';
+        ctx.shadowBlur = 2;
+        for (let row = 0; row < this.rows; row++) {
+            for (let col = 0; col < this.cols; col++) {
+                if (this.tiles[row][col].color === this.cellColor) continue;   // 只画已翻格
+                ctx.drawImage(this.pigStamp,
+                    this.offsetX + col * this.cellSize, this.offsetY + row * this.cellSize,
+                    this.cellSize, this.cellSize);
+            }
+        }
+        ctx.restore();
     }
 }
