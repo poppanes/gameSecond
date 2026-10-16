@@ -607,17 +607,11 @@ class Game {
         if (typeof drawBursts === 'function') drawBursts(this.ctx);
         if (typeof drawFloatTexts === 'function') drawFloatTexts(this.ctx);
         
-        // 绘制倒计时（测试地图显示"测试模式"标签）
+        // 街机 HUD 信息栏（生命 ♥ / TIME / SCORE；测试地图中部留给测试标签）
+        this.drawHud(this.testMode);
         if (this.testMode) {
-            this.drawTestLabel();
             this.drawTestHelp();
-        } else {
-            this.drawTimer();
         }
-        // 绘制生命值
-        this.drawLives();
-        // 绘制分数
-        this.drawScore();
         
         // 通关画面
         if (this.gameWin) {
@@ -809,6 +803,60 @@ class Game {
         ctx.restore();
     }
     
+    // 街机 HUD 信息栏：左生命 ♥ / 中 TIME（测试地图让位给测试标签）/ 右 SCORE
+    drawHud(testMode = false) {
+        const ctx = this.ctx;
+        ctx.save();
+
+        // 顶部信息栏（地图上方区域：半透明黑 + 霓虹底边）
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, OFFSET_Y - 8);
+        ctx.strokeStyle = 'rgba(0, 229, 255, 0.25)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, OFFSET_Y - 8);
+        ctx.lineTo(CANVAS_WIDTH, OFFSET_Y - 8);
+        ctx.stroke();
+
+        ctx.textBaseline = 'middle';
+        const y = (OFFSET_Y - 8) / 2;
+
+        // 左：生命 ♥（≤1 时红色告警）
+        if (player) {
+            const hearts = '♥'.repeat(Math.max(0, player.lives));
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = player.lives <= 1 ? '#ff4444' : '#ff6b9d';
+            ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.lineWidth = 4;
+            ctx.strokeText(hearts, OFFSET_X, y);
+            ctx.fillText(hearts, OFFSET_X, y);
+        }
+
+        // 中：TIME（testMode 时中部留给测试标签）
+        if (!testMode) {
+            const seconds = Math.ceil(this.timeLeft / 1000);
+            ctx.font = `18px ${ARCADE_FONT}`;
+            ctx.textAlign = 'center';
+            ctx.fillStyle = seconds <= 10 ? '#ff4444' : '#ffffff';
+            ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.lineWidth = 5;
+            ctx.strokeText('TIME ' + seconds, CANVAS_WIDTH / 2, y);
+            ctx.fillText('TIME ' + seconds, CANVAS_WIDTH / 2, y);
+        }
+
+        // 右：SCORE（金色，右对齐到地图右缘）
+        ctx.font = `16px ${ARCADE_FONT}`;
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#ffd700';
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.lineWidth = 5;
+        ctx.strokeText('' + this.score, OFFSET_X + GRID_WIDTH, y);
+        ctx.fillText('' + this.score, OFFSET_X + GRID_WIDTH, y);
+
+        ctx.restore();
+    }
+
     // 顶部居中倒计时（Time：XXs）
     drawTimer() {
         const seconds = Math.ceil(this.timeLeft / 1000);
@@ -1140,6 +1188,7 @@ class Game {
     // 结束奖励关卡
     _endBonusRound(fromBomb) {
         this.bonusPhase = 'settlement';
+        this._settleAnimStart = performance.now();   // 结算滚动动画起点
         this.bonusPhaseTimer = BONUS_SETTLE_DURATION;
         gameInput.enabled = false;
         console.log(`[Bonus] 进入结算 (炸弹:${fromBomb})`);
@@ -1164,11 +1213,15 @@ class Game {
     _drawSettlement() {
         const ctx = this.ctx;
         ctx.save();
-        
+
         // 半透明遮罩
         ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        
+
+        // 结算滚动进度：elapsed ∈ [0, ∞)，项依次渐现、总分滚动累加
+        const elapsed = this._settleAnimStart ? (performance.now() - this._settleAnimStart) : 0;
+        const ease = t => 1 - Math.pow(1 - Math.min(1, t), 3);   // easeOutCubic
+
         // 标题
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1178,54 +1231,65 @@ class Game {
         ctx.lineWidth = 5;
         ctx.strokeText('BONUS ROUND CLEAR!', CANVAS_WIDTH / 2, 100);
         ctx.fillText('BONUS ROUND CLEAR!', CANVAS_WIDTH / 2, 100);
-        
-        // 水果收集列表
+
+        // 水果收集列表（按项渐现）
         const fruitKeys = ['banana', 'orange', 'dragonfruit', 'watermelon', 'icecream'];
         let totalBonus = 0;
         let y = 180;
-        
+        let idx = 0;
+
         fruitKeys.forEach(key => {
             const count = this.bonusCollected[key] || 0;
             if (count === 0) return;
             const info = BONUS_FRUIT_TYPES[key];
             const subTotal = info.score * count;
             totalBonus += subTotal;
-            
-            // 图标
-            const img = this._bonusImages[key];
-            if (img && img.complete) ctx.drawImage(img, CANVAS_WIDTH / 2 - 200, y - 18, 36, 36);
-            
-            // 数量×分数
-            ctx.font = 'bold 28px Arial';
-            ctx.fillStyle = '#fff';
-            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-            ctx.lineWidth = 3;
-            ctx.textAlign = 'left';
-            ctx.strokeText(`${info.name}  ×${count}  +${subTotal}`, CANVAS_WIDTH / 2 - 150, y);
-            ctx.fillText(`${info.name}  ×${count}  +${subTotal}`, CANVAS_WIDTH / 2 - 150, y);
+
+            const showAt = 150 + idx * 220;              // 第 idx 项 220ms 后渐现
+            const itemT = Math.max(0, Math.min(1, (elapsed - showAt) / 250));
+            if (itemT > 0) {
+                // 图标
+                const img = this._bonusImages[key];
+                if (img && img.complete) ctx.drawImage(img, CANVAS_WIDTH / 2 - 200, y - 18, 36, 36);
+
+                // 数量×分数
+                ctx.font = 'bold 28px Arial';
+                ctx.globalAlpha = itemT;
+                ctx.fillStyle = '#fff';
+                ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+                ctx.lineWidth = 3;
+                ctx.textAlign = 'left';
+                ctx.strokeText(`${info.name}  ×${count}  +${subTotal}`, CANVAS_WIDTH / 2 - 150, y);
+                ctx.fillText(`${info.name}  ×${count}  +${subTotal}`, CANVAS_WIDTH / 2 - 150, y);
+                ctx.globalAlpha = 1;
+            }
+            idx++;
             y += 50;
         });
-        
-        // 总分
+
+        // 总分（滚动累加：随时间从 0 滚到 totalBonus）
+        const rollT = ease(Math.max(0, (elapsed - 400) / 1000));
+        const shownTotal = Math.floor(totalBonus * rollT);
         ctx.textAlign = 'center';
         ctx.font = `20px ${ARCADE_FONT}`;
         ctx.fillStyle = '#ffd700';
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 4;
-        ctx.strokeText(`TOTAL: +${totalBonus}`, CANVAS_WIDTH / 2, y + 30);
-        ctx.fillText(`TOTAL: +${totalBonus}`, CANVAS_WIDTH / 2, y + 30);
-        
-        // 倒计时
-        const remain = Math.ceil(this.bonusPhaseTimer / 1000);
-        ctx.font = 'bold 24px Arial';
-        ctx.fillStyle = '#aaa';
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-        ctx.lineWidth = 2;
-        const tAlpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
-        ctx.fillStyle = `rgba(255,255,255,${tAlpha})`;
-        ctx.strokeText(`Next round in ${remain}s...`, CANVAS_WIDTH / 2, y + 80);
-        ctx.fillText(`Next round in ${remain}s...`, CANVAS_WIDTH / 2, y + 80);
-        
+        ctx.strokeText(`TOTAL: +${shownTotal}`, CANVAS_WIDTH / 2, y + 30);
+        ctx.fillText(`TOTAL: +${shownTotal}`, CANVAS_WIDTH / 2, y + 30);
+
+        // 倒计时（滚动结束后出现）
+        if (elapsed > 1500) {
+            const remain = Math.ceil(this.bonusPhaseTimer / 1000);
+            ctx.font = 'bold 24px Arial';
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.lineWidth = 2;
+            const tAlpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+            ctx.fillStyle = `rgba(255,255,255,${tAlpha})`;
+            ctx.strokeText(`Next round in ${remain}s...`, CANVAS_WIDTH / 2, y + 80);
+            ctx.fillText(`Next round in ${remain}s...`, CANVAS_WIDTH / 2, y + 80);
+        }
+
         ctx.restore();
     }
     
