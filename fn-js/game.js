@@ -540,6 +540,13 @@ class Game {
     render() {
         // 清空画布
         this.ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+        // 覆盖层动画起点检测（CLEAR / GAME OVER 首帧记录，非覆盖态自动复位）
+        if (this.gameWin || this.gameOver) {
+            if (!this._overlayAnimStart) this._overlayAnimStart = performance.now();
+        } else {
+            this._overlayAnimStart = 0;
+        }
         
         // 帧率显示（最上层，所有模式都画）
         if (SHOW_FPS) this.drawFps();
@@ -669,32 +676,51 @@ class Game {
     }
     
     // 通关画面
+    // 覆盖层砸落动画缓动：0 → 1（easeOutCubic）
+    _overlayEase() {
+        const elapsed = this._overlayAnimStart ? (performance.now() - this._overlayAnimStart) : 999;
+        const t = Math.min(1, elapsed / 450);
+        return 1 - Math.pow(1 - t, 3);
+    }
+
     drawGameWin() {
         const ctx = this.ctx;
         ctx.save();
-        
+
         // 半透明遮罩
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        
-        // 通关标题
+
+        // 通关标题：砸落动画（从上方落下 + 缩放收拢 + 渐显）
+        const ease = this._overlayEase();
+        const dropY = (1 - ease) * -120;
+        const scale = 1 + (1 - ease) * 1.6;
+        ctx.save();
+        ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = ease;
         ctx.font = `36px ${ARCADE_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffd700';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 4;
-        ctx.strokeText('CLEAR!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
-        ctx.fillText('CLEAR!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
-        
-        // 提示
+        ctx.lineWidth = 6;
+        ctx.strokeText('CLEAR!', 0, 0);
+        ctx.fillText('CLEAR!', 0, 0);
+        ctx.restore();
+
+        // 提示（标题落定后渐显）
         ctx.font = `14px ${ARCADE_FONT}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.globalAlpha = ease > 0.6 ? (ease - 0.6) / 0.4 : 0;
         ctx.fillStyle = '#fff';
         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
         ctx.lineWidth = 3;
         ctx.strokeText('All Tiles Flipped!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 25);
         ctx.fillText('All Tiles Flipped!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 25);
-        
+        ctx.globalAlpha = 1;
+
         // 下一关提示（闪烁效果）
         const alpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
         ctx.font = '22px Arial';
@@ -703,37 +729,50 @@ class Game {
         ctx.lineWidth = 2;
         ctx.strokeText('进入下一关...', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
         ctx.fillText('进入下一关...', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
-        
+
         ctx.restore();
     }
     
     // 游戏结束覆盖层
     drawGameOver() {
         const ctx = this.ctx;
-        
+
         // 半透明遮罩
         ctx.save();
         ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        
-        // Game Over 标题
+
+        // Game Over 标题：砸落动画（震感更强：落下 + 微弹）
+        const ease = this._overlayEase();
+        const dropY = (1 - ease) * -140;
+        const scale = 1 + (1 - ease) * 1.8;
+        const shakeX = ease >= 1 ? Math.sin(performance.now() / 40) * 2 : 0;   // 落定后微颤
+        ctx.save();
+        ctx.translate(CANVAS_WIDTH / 2 + shakeX, CANVAS_HEIGHT / 2 - 40);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = ease;
         ctx.font = `36px ${ARCADE_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#e94560';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 4;
-        ctx.strokeText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
-        ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
-        
-        // Time's Up 提示
+        ctx.lineWidth = 6;
+        ctx.strokeText('GAME OVER', 0, 0);
+        ctx.fillText('GAME OVER', 0, 0);
+        ctx.restore();
+
+        // Time's Up 提示（标题落定后渐显）
         ctx.font = `14px ${ARCADE_FONT}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.globalAlpha = ease > 0.6 ? (ease - 0.6) / 0.4 : 0;
         ctx.fillStyle = '#fff';
         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
         ctx.lineWidth = 3;
         ctx.strokeText('Time\'s Up!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 25);
         ctx.fillText('Time\'s Up!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 25);
-        
+        ctx.globalAlpha = 1;
+
         // 重试提示（闪烁效果）
         const alpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
         ctx.font = '22px Arial';
@@ -742,7 +781,7 @@ class Game {
         ctx.lineWidth = 2;
         ctx.strokeText('空格键重试本关', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
         ctx.fillText('空格键重试本关', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
-        
+
         ctx.restore();
     }
     
