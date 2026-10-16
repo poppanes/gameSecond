@@ -86,6 +86,7 @@ class Game {
         this.gameOver = false;
         this.gameWin = false;
         this.score = 0;
+        this._hiScore = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem('fn_hi')) || '0', 10) || 0;   // 街机 HI-SCORE（持久化）
         
         // 关卡进度状态
         this.mode = 'menu';               // 'menu' | 'playing'
@@ -882,6 +883,10 @@ class Game {
     // 增加分数
     addScore(amount) {
         this.score += amount;
+        if (this.score > this._hiScore) {
+            this._hiScore = this.score;
+            try { localStorage.setItem('fn_hi', String(this._hiScore)); } catch (err) { /* 隐私模式等忽略 */ }
+        }
     }
     
     // 右上角分数显示
@@ -1260,6 +1265,10 @@ class Game {
         ctx.font = 'bold 15px Arial';
         ctx.fillStyle = '#8ea6ff';
         ctx.fillText('· 关 卡 选 择 ·', CANVAS_WIDTH / 2, 94);
+        // HI-SCORE（街机最高分，localStorage 持久化）
+        ctx.font = `10px ${ARCADE_FONT}`;
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText('HI-SCORE ' + this._hiScore, CANVAS_WIDTH / 2, 116);
         
         // 卡片网格：4 列 × 3 行
         const cols = 4;
@@ -1284,7 +1293,24 @@ class Game {
             ctx.lineWidth = selected ? 4 : 2;
             ctx.fillRect(x, y, cardW, cardH);
             ctx.strokeRect(x, y, cardW, cardH);
-            
+
+            // 选中效果：跑马灯虚线外框 + ▶ 光标闪烁
+            if (selected) {
+                ctx.save();
+                ctx.strokeStyle = '#00e5ff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([12, 8]);
+                ctx.lineDashOffset = -performance.now() / 30;   // 流动
+                ctx.strokeRect(x - 5, y - 5, cardW + 10, cardH + 10);
+                ctx.setLineDash([]);
+                ctx.restore();
+                if (Math.sin(performance.now() / 180) > -0.3) {
+                    ctx.font = '16px Arial';
+                    ctx.fillStyle = '#ffd700';
+                    ctx.fillText('▶', x - 24, y + cardH / 2);
+                }
+            }
+
             // 关卡名
             ctx.font = 'bold 26px Arial';
             ctx.fillStyle = unlocked ? '#fff' : '#555';
@@ -1325,7 +1351,24 @@ class Game {
             ctx.lineWidth = selected ? 4 : 2;
             ctx.fillRect(x, y, cardW, cardH);
             ctx.strokeRect(x, y, cardW, cardH);
-            
+
+            // 选中效果（测试地图卡片同样式）
+            if (selected) {
+                ctx.save();
+                ctx.strokeStyle = '#00e5ff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([12, 8]);
+                ctx.lineDashOffset = -performance.now() / 30;
+                ctx.strokeRect(x - 5, y - 5, cardW + 10, cardH + 10);
+                ctx.setLineDash([]);
+                ctx.restore();
+                if (Math.sin(performance.now() / 180) > -0.3) {
+                    ctx.font = '16px Arial';
+                    ctx.fillStyle = '#ffd700';
+                    ctx.fillText('▶', x - 24, y + cardH / 2);
+                }
+            }
+
             ctx.font = 'bold 26px Arial';
             ctx.fillStyle = '#fff';
             ctx.textAlign = 'center';
@@ -1336,6 +1379,13 @@ class Game {
             ctx.fillText('沙盒：自由生成', x + cardW / 2, y + 64);
         }
         
+        // INSERT COIN（街机待机闪烁）
+        if (Math.sin(performance.now() / 300) > -0.2) {
+            ctx.font = `12px ${ARCADE_FONT}`;
+            ctx.fillStyle = '#ffd700';
+            ctx.fillText('INSERT COIN', CANVAS_WIDTH / 2, CANVAS_HEIGHT - 74);
+        }
+
         // 底部提示
         ctx.font = '15px Arial';
         ctx.fillStyle = '#9fb3d9';
