@@ -104,10 +104,14 @@ class GameInput extends InputHandler {
                 return;
             }
         }
-        // 游戏结束：空格键重新开始
+        // 结算画面按键（输入已锁）：空格重开 / R 看广告复活 / D 看广告双倍
         if (!this.enabled) {
             if (code === 'Space') {
                 game.restart('Space键');
+            } else if (code === 'KeyR') {
+                game.requestAdRevive();
+            } else if (code === 'KeyD') {
+                game.requestAdDoubleScore();
             }
             return;
         }

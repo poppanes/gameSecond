@@ -95,11 +95,13 @@ class Game {
         this.menuCursor = 0;              // 菜单光标位置
         this._levelClearTimer = 0;        // 通关停留计时(ms)
         this.testMode = false;            // 测试地图模式（沙盒：自由生成怪物/物件）
+        this._testMapVisible = SHOW_TEST_MAP;   // 菜单测试地图卡片显隐（` 键可临时切换）
         this.fps = 0;                     // 当前帧率（SHOW_FPS 控制是否绘制）
         this._fpsFrames = 0;              // FPS 采样帧数
         this._fpsTimer = 0;               // FPS 采样累计时间(ms)
         this._testTool = null;            // 当前选中的测试工具（怪物类型 / 物件类型）
         this._testCanvasBound = false;    // canvas 鼠标点击事件是否已绑定
+        this._toolToast = null;           // 工具切换弹窗反馈（画布中央大字，1.4s 淡出）
         
         // 奖励关卡状态
         this.bonusMode = false;
@@ -148,6 +150,9 @@ class Game {
         this.gameOver = false;
         this.gameWin = false;
         this.timeLeft = GAME_DURATION;
+        this._roundScoreBase = this.score;    // 本关得分基准（广告双倍用）
+        this._adDoubleUsed = false;           // 本关双倍奖励是否已领
+        if (typeof AdManager !== 'undefined') AdManager.hideBanner();   // 进游戏收起菜单横幅
         this._levelClearTimer = 0;
         this.bonusMode = false;
         this.bonusFruits = [];
@@ -401,7 +406,42 @@ class Game {
         }
         if (this._testTool) {
             console.log(`[test] 当前工具: ${TEST_TOOL_NAMES[this._testTool] || this._testTool}（鼠标点击格子放置）`);
+            this._showToolToast(this._testTool);   // 画布中央弹窗反馈（可视确认当前工具）
         }
+    }
+
+    // 工具切换弹窗反馈：画布中央大字，出现时放大 + 尾部 400ms 淡出
+    _showToolToast(tool) {
+        const name = TEST_TOOL_NAMES[tool] || tool || '';
+        this._toolToast = { text: name, t: 1400, total: 1400 };
+    }
+
+    // 弹窗绘制（测试地图最上层；工具名中文用 Arial，金色光晕）
+    _drawToolToast() {
+        if (!this._toolToast) return;
+        const ctx = this.ctx;
+        const { text, t, total } = this._toolToast;
+        const appear = 1 - t / total;                        // 0→1 出现进度
+        const alpha = Math.min(1, t / 400);                  // 尾部淡出
+        const scale = 1 + Math.max(0, 0.35 - appear) * 1.6;  // 出现瞬间放大回落
+        ctx.save();
+        ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = alpha;
+        ctx.font = 'bold 30px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 16;
+        ctx.fillStyle = 'rgba(255, 215, 0, 0.9)';
+        ctx.fillText(text, 0, 0);
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 5;
+        ctx.strokeText(text, 0, 0);
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText(text, 0, 0);
+        ctx.restore();
     }
     
     // 循环切换道具类型（[I] 键）
@@ -447,6 +487,12 @@ class Game {
             return;
         }
         
+        // 工具切换弹窗衰减
+        if (this._toolToast) {
+            this._toolToast.t -= dt;
+            if (this._toolToast.t <= 0) this._toolToast = null;
+        }
+
         if (!this.gameOver && !this.gameWin) {
             // 倒计时（测试地图不限时）
             if (this.timeLeft > 0 && !this.testMode) {
@@ -487,6 +533,7 @@ class Game {
             if (!this.testMode && map && map.areAllFlipped() && this._levelClearTimer === 0) {
                 clearAllFlips();
                 gameInput.enabled = false;
+                this._lastRoundScore = this.score - this._roundScoreBase;   // 本关得分（广告双倍用）
                 this._levelClearTimer = 3000;  // 3秒后进入下一关
                 this._unlockNext();            // 通关 → 解锁下一关
                 console.log('[Game] 通关！3秒后进入下一关');
@@ -519,7 +566,52 @@ class Game {
     
     // 进入下一关（levelIndex + 1）
     _advanceToNextLevel() {
-        this.loadLevel(this.levelIndex + 1);
+        if (typeof AdManager !== 'undefined') AdManager.showInterstitial('level_gap');   // 关卡间隙插屏（门面层自带频控）
+        let next = this.levelIndex + 1;
+        if (!SHOW_SPECIAL_LEVELS) {
+            while (next < LEVELS.length && LEVELS[next].type === 'bonus') next++;   // 特殊关卡隐藏 → 跳过
+        }
+        this.loadLevel(next);
+    }
+
+    // ============================================
+    // 广告位业务接入（AdManager 门面；开发模式 Mock 立即回调，可直接游玩测试）
+    // ============================================
+    // 看广告复活（GAME OVER 画面按 R）：恢复 1 命继续本关
+    requestAdRevive() {
+        if (!this.gameOver || this.testMode) return;
+        if (typeof AdManager === 'undefined') return;
+        if (!AdManager.isReady('rewarded')) { console.log('[Ad] 复活广告未就绪'); return; }
+        AdManager.showRewarded('revive',
+            () => this._applyAdRevive(),
+            (ok) => { if (!ok) console.log('[Ad] 复活广告未完成，不复活'); });
+    }
+
+    _applyAdRevive() {
+        if (!player) return;
+        this.gameOver = false;
+        player.lives = 1;                     // 恢复 1 命
+        player._revive();                     // 解锁移动 + 重生点落位 + 无敌帧（复用受伤重生链）
+        gameInput.enabled = true;
+        if (this.timeLeft <= 0) this.timeLeft = 30000;   // 时间到死亡的复活缓冲
+        if (typeof spawnFloatText === 'function') {
+            spawnFloatText(player.gridX, player.gridY, 'REVIVE!', '#ffd700');
+        }
+        console.log('[Ad] 看广告复活：恢复 1 命继续本关');
+    }
+
+    // 看广告双倍奖励（CLEAR 画面按 D）：再得一次本关得分，每关限一次
+    requestAdDoubleScore() {
+        if (!this.gameWin || this._adDoubleUsed) return;
+        if (typeof AdManager === 'undefined' || !(this._lastRoundScore > 0)) return;
+        if (!AdManager.isReady('rewarded')) { console.log('[Ad] 双倍广告未就绪'); return; }
+        AdManager.showRewarded('double_score',
+            () => {
+                this._adDoubleUsed = true;
+                this.addScore(this._lastRoundScore);   // 复用加分（自动更新 HI-SCORE）
+                console.log(`[Ad] 双倍奖励：+${this._lastRoundScore}`);
+            },
+            (ok) => { if (!ok) console.log('[Ad] 双倍广告未完成'); });
     }
     
     // 全部通关 → 回到菜单
@@ -534,6 +626,7 @@ class Game {
         enemies.length = 0;
         respawnQueue.length = 0;
         blackHoles.length = 0;
+        if (typeof AdManager !== 'undefined') AdManager.showBanner('menu_banner');   // 回菜单展示横幅
         console.log('[Game] 返回菜单');
     }
     
@@ -610,7 +703,9 @@ class Game {
         // 街机 HUD 信息栏（生命 ♥ / TIME / SCORE；测试地图中部留给测试标签）
         this.drawHud(this.testMode);
         if (this.testMode) {
+            this.drawTestLabel();     // 测试模式 + 当前工具标签（原设计漏接的调用，修复不显示）
             this.drawTestHelp();
+            this._drawToolToast();    // 工具切换弹窗（最上层）
         }
         
         // 通关画面
@@ -685,22 +780,32 @@ class Game {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-        // 通关标题：砸落动画（从上方落下 + 缩放收拢 + 渐显）
+        // 通关标题：砸落动画 + 霓虹光晕高亮 + 呼吸脉动（醒目大字）
         const ease = this._overlayEase();
-        const dropY = (1 - ease) * -120;
-        const scale = 1 + (1 - ease) * 1.6;
+        const settle = 1 + (1 - ease) * 1.6;
+        const pulse = ease >= 1 ? 1 + Math.sin(performance.now() / 220) * 0.035 : settle;   // 落定后呼吸脉动
+        const glow = 16 + Math.sin(performance.now() / 220) * 8;                            // 光晕随呼吸强弱
         ctx.save();
         ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
-        ctx.scale(scale, scale);
+        ctx.scale(pulse, pulse);
         ctx.globalAlpha = ease;
         ctx.font = `36px ${ARCADE_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#ffd700';
+        // 光晕层（金色霓虹，双层叠加更醒目）
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = glow;
+        ctx.fillStyle = 'rgba(255, 215, 0, 0.85)';
+        ctx.fillText('STAGE CLEAR!', 0, 0);
+        ctx.shadowBlur = glow + 14;
+        ctx.fillText('STAGE CLEAR!', 0, 0);
+        // 实体字层（黑描边 + 金色实心）
+        ctx.shadowBlur = 0;
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 6;
-        ctx.strokeText('CLEAR!', 0, 0);
-        ctx.fillText('CLEAR!', 0, 0);
+        ctx.strokeText('STAGE CLEAR!', 0, 0);
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText('STAGE CLEAR!', 0, 0);
         ctx.restore();
 
         // 提示（标题落定后渐显）
@@ -723,6 +828,14 @@ class Game {
         ctx.lineWidth = 2;
         ctx.strokeText('进入下一关...', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
         ctx.fillText('进入下一关...', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
+
+        // 看广告双倍奖励提示（激励视频，金色闪烁）
+        ctx.font = '18px Arial';
+        ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 2;
+        ctx.strokeText('D: 看广告双倍奖励', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 105);
+        ctx.fillText('D: 看广告双倍奖励', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 105);
 
         ctx.restore();
     }
@@ -775,6 +888,14 @@ class Game {
         ctx.lineWidth = 2;
         ctx.strokeText('空格键重试本关', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
         ctx.fillText('空格键重试本关', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 70);
+
+        // 看广告复活提示（激励视频，金色闪烁）
+        ctx.font = '18px Arial';
+        ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 2;
+        ctx.strokeText('R: 看广告复活', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 105);
+        ctx.fillText('R: 看广告复活', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 105);
 
         ctx.restore();
     }
@@ -1383,6 +1504,7 @@ class Game {
         const startY = 130;
         
         LEVELS.forEach((lvl, i) => {
+            if (!this._menuCardVisible(i)) return;   // 隐藏卡片不渲染、不参与布局
             const c = i % cols;
             const r = Math.floor(i / cols);
             const x = startX + c * (cardW + gapX);
@@ -1414,34 +1536,30 @@ class Game {
                 }
             }
 
-            // 关卡名
-            ctx.font = 'bold 26px Arial';
-            ctx.fillStyle = unlocked ? '#fff' : '#555';
+            // 关卡名（像素字水平垂直居中；BONUS 关金色；未解锁上移给锁图标让位）
+            ctx.font = `14px ${ARCADE_FONT}`;
+            ctx.fillStyle = !unlocked ? '#555' : (lvl.type === 'bonus' ? '#ffd700' : '#fff');
             ctx.textAlign = 'center';
-            ctx.fillText(lvl.name, x + cardW / 2, y + 32);
-            
-            // 副标题（怪物组成 / 特殊标识）
-            ctx.font = '16px Arial';
-            if (lvl.type === 'bonus') {
-                ctx.fillStyle = unlocked ? '#ffd700' : '#665';
-                ctx.fillText('奖励关卡', x + cardW / 2, y + 66);
-            } else {
-                const parts = Object.entries(lvl.enemies)
-                    .map(([t, n]) => `${ENEMY_NAMES[t] || t}×${n}`);
-                ctx.fillStyle = unlocked ? '#9fb3d9' : '#555';
-                ctx.fillText(parts.join(' '), x + cardW / 2, y + 66);
+            ctx.fillText(lvl.name, x + cardW / 2, unlocked ? y + cardH / 2 : y + cardH / 2 - 22);
+
+            // 锁定标识：挂锁图标 + LOCKED（三行内容以卡片中心对称）
+            if (!unlocked) {
+                this._drawLockIcon(ctx, x + cardW / 2, y + cardH / 2 + 2, 13);
+                ctx.font = `9px ${ARCADE_FONT}`;
+                ctx.fillStyle = '#666';
+                ctx.fillText('LOCKED', x + cardW / 2, y + cardH / 2 + 26);
             }
-            
+
             // 锁定标识
             if (!unlocked) {
-                ctx.font = '20px Arial';
-                ctx.fillStyle = '#777';
-                ctx.fillText('未解锁', x + cardW / 2, y + 92);
+                ctx.font = `10px ${ARCADE_FONT}`;
+                ctx.fillStyle = '#666';
+                ctx.fillText('LOCKED', x + cardW / 2, y + cardH / 2 + 22);
             }
         });
         
-        // 测试地图卡片（永远解锁，索引 = LEVELS.length）
-        {
+        // 测试地图卡片（永远解锁，索引 = LEVELS.length；SHOW_TEST_MAP=false 隐藏，` 键临时呼出）
+        if (this._testMapVisible) {
             const i = LEVELS.length;
             const c = i % cols;
             const r = Math.floor(i / cols);
@@ -1475,11 +1593,11 @@ class Game {
             ctx.font = 'bold 26px Arial';
             ctx.fillStyle = '#fff';
             ctx.textAlign = 'center';
-            ctx.fillText('测试地图', x + cardW / 2, y + 32);
-            
+            ctx.fillText('测试地图', x + cardW / 2, y + cardH / 2 - 14);
+
             ctx.font = '15px Arial';
             ctx.fillStyle = '#c9a6ff';
-            ctx.fillText('沙盒：自由生成', x + cardW / 2, y + 64);
+            ctx.fillText('沙盒：自由生成', x + cardW / 2, y + cardH / 2 + 14);
         }
         
         // INSERT COIN（街机待机闪烁）
@@ -1496,28 +1614,73 @@ class Game {
         ctx.fillText('方向键选择 · Enter/空格进入 · 总分：' + this.score, CANVAS_WIDTH / 2, CANVAS_HEIGHT - 40);
     }
     
-    // 菜单按键处理
+    // 菜单卡片可见性（特殊关卡/测试地图受上线开关控制）
+    _menuCardVisible(i) {
+        if (i === LEVELS.length) return this._testMapVisible;    // 测试地图卡片
+        const lvl = LEVELS[i];
+        if (lvl && lvl.type === 'bonus' && !SHOW_SPECIAL_LEVELS) return false;
+        return true;
+    }
+
+    // 挂锁图标（关卡未解锁标识）：锁梁上半圆 + 锁体 + 锁孔
+    _drawLockIcon(ctx, cx, cy, size = 13) {
+        ctx.save();
+        ctx.strokeStyle = '#8a8f9e';
+        ctx.fillStyle = '#8a8f9e';
+        ctx.lineWidth = Math.max(2, size * 0.18);
+        // 锁梁（上半圆弧）
+        ctx.beginPath();
+        ctx.arc(cx, cy - size * 0.18, size * 0.34, Math.PI, 0);
+        ctx.stroke();
+        // 锁体
+        ctx.fillRect(cx - size * 0.5, cy - size * 0.18, size, size * 0.68);
+        // 锁孔
+        ctx.fillStyle = '#10101f';
+        ctx.beginPath();
+        ctx.arc(cx, cy + size * 0.12, size * 0.11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    // 菜单光标步进：自动跳过隐藏卡片（delta 为 ±1 / ±cols）
+    _menuStep(delta) {
+        const total = LEVELS.length + 1;
+        let cur = this.menuCursor;
+        for (let k = 0; k < total; k++) {
+            cur = (cur + delta + total) % total;
+            if (this._menuCardVisible(cur)) break;
+        }
+        this.menuCursor = cur;
+    }
+
+    // 菜单按键处理（导航自动跳过隐藏卡片）
     menuKeyDown(code) {
         const cols = 4;
-        const total = LEVELS.length + 1;  // 多一个测试地图卡片
         switch (code) {
             case 'ArrowLeft': case 'KeyA':
-                this.menuCursor = (this.menuCursor - 1 + total) % total;
+                this._menuStep(-1);
                 break;
             case 'ArrowRight': case 'KeyD':
-                this.menuCursor = (this.menuCursor + 1) % total;
+                this._menuStep(1);
                 break;
             case 'ArrowUp': case 'KeyW':
-                this.menuCursor = (this.menuCursor - cols + total) % total;
+                this._menuStep(-cols);
                 break;
             case 'ArrowDown': case 'KeyS':
-                this.menuCursor = (this.menuCursor + cols) % total;
+                this._menuStep(cols);
+                break;
+            case 'Backquote':
+                // 隐藏入口：` 键呼出/关闭测试地图卡片（上线后开发者专用）
+                this._testMapVisible = !this._testMapVisible;
+                if (!this._testMapVisible && this.menuCursor === LEVELS.length) this._menuStep(-1);
+                console.log(`[Menu] 测试地图入口 ${this._testMapVisible ? '已呼出' : '已隐藏'}`);
                 break;
             case 'Enter': case 'Space': case 'KeyJ':
-                if (this.menuCursor === LEVELS.length) {
+                if (this.menuCursor === LEVELS.length && this._testMapVisible) {
                     console.log('[Menu] 选择测试地图');
                     this._startTestMap();
-                } else if (this.menuCursor <= this.unlockedIndex) {
+                } else if (this.menuCursor < LEVELS.length && this._menuCardVisible(this.menuCursor) &&
+                           this.menuCursor <= this.unlockedIndex) {
                     console.log(`[Menu] 选择关卡: ${LEVELS[this.menuCursor].name}`);
                     this.loadLevel(this.menuCursor);
                 } else {

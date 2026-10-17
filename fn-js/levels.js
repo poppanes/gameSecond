@@ -20,6 +20,14 @@ const UNLOCK_ALL = true;
 // 墙（空气墙）是否可见：true = 半透明可视化（便于编辑调试），false = 完全不可见（真空气墙）
 const WALL_VISIBLE = true;
 
+// ============================================
+// 上线配置开关（正式发布前逐项确认）
+// ============================================
+// 特殊关卡（BONUS）是否开放：false = 菜单隐藏该卡片 + 通关流程自动跳过
+const SHOW_SPECIAL_LEVELS = true;
+// 测试地图卡片是否显示：false = 菜单隐藏（开发者可按 ` 键临时呼出/关闭）
+const SHOW_TEST_MAP = true;
+
 // 怪物中文名（菜单/日志展示用）
 const ENEMY_NAMES = {
     Ghost:    '幽灵',
@@ -50,7 +58,7 @@ const TIER_TIME = {
 // 特殊关卡（type:'bonus'）不使用布局，走 initEmpty 全白地板。
 // ============================================
 const LEVELS = [
-    { id: 1,  name: '第1回合',  type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
+    { id: 1,  name: 'ROUND 1', type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
       layout: [
         "........",
         "........",
@@ -60,7 +68,7 @@ const LEVELS = [
         "........",
         "........",
       ] },
-    { id: 2,  name: '第2回合',  type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
+    { id: 2,  name: 'ROUND 2', type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
       layout: [
         "........",
         ".S....S.",
@@ -70,7 +78,7 @@ const LEVELS = [
         ".S....S.",
         "........",
       ] },
-    { id: 3,  name: '第3回合',  type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
+    { id: 3,  name: 'ROUND 3', type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
       layout: [
         "........",
         "........",
@@ -80,7 +88,7 @@ const LEVELS = [
         "..SSS...",
         "........",
       ] },
-    { id: 4,  name: '第4回合',  type: 'normal', tier: 1, enemies: { Ghost: 2, Spider: 1 },
+    { id: 4,  name: 'ROUND 4', type: 'normal', tier: 1, enemies: { Ghost: 2, Spider: 1 },
       layout: [
         "........",
         "..S..B..",
@@ -90,8 +98,8 @@ const LEVELS = [
         "..B..S..",
         "........",
       ] },
-    { id: 5,  name: '特殊关卡-1', type: 'bonus', tier: 1 },
-    { id: 6,  name: '第5回合',  type: 'normal', tier: 1, enemies: { Ghost: 2, Spider: 1 },
+    { id: 5,  name: 'BONUS 1', type: 'bonus', tier: 1 },
+    { id: 6,  name: 'ROUND 5', type: 'normal', tier: 1, enemies: { Ghost: 2, Spider: 1 },
       layout: [
         "........",
         "......S.",
@@ -101,7 +109,7 @@ const LEVELS = [
         "........",
         "........",
       ] },
-    { id: 7,  name: '第6回合',  type: 'normal', tier: 2, enemies: { Ghost: 1, Spider: 1, Snowman: 1 },
+    { id: 7,  name: 'ROUND 6', type: 'normal', tier: 2, enemies: { Ghost: 1, Spider: 1, Snowman: 1 },
       layout: [
         "........",
         "........",
@@ -111,7 +119,7 @@ const LEVELS = [
         "....BSS.",
         "........",
       ] },
-    { id: 8,  name: '第7回合',  type: 'normal', tier: 2, enemies: { Owl: 1, Spider: 1, Snowman: 1 },
+    { id: 8,  name: 'ROUND 7', type: 'normal', tier: 2, enemies: { Owl: 1, Spider: 1, Snowman: 1 },
       layout: [
         "........",
         "........",
@@ -121,7 +129,7 @@ const LEVELS = [
         "....#...",
         "....#...",
       ] },
-    { id: 9,  name: '第8回合',  type: 'normal', tier: 2, enemies: { Octopus: 1, Spider: 1, Ghost: 1 },
+    { id: 9,  name: 'ROUND 8', type: 'normal', tier: 2, enemies: { Octopus: 1, Spider: 1, Ghost: 1 },
       layout: [
         "........",
         "...SB...",
@@ -131,8 +139,8 @@ const LEVELS = [
         "...BS...",
         "........",
       ] },
-    { id: 10, name: '特殊关卡-2', type: 'bonus', tier: 2 },
-    { id: 11, name: '第9回合',  type: 'normal', tier: 2, enemies: { Octopus: 1, Spider: 1, Ghost: 1 },
+    { id: 10, name: 'BONUS 2', type: 'bonus', tier: 2 },
+    { id: 11, name: 'ROUND 9', type: 'normal', tier: 2, enemies: { Octopus: 1, Spider: 1, Ghost: 1 },
       layout: [
         "........",
         "....HHHH",
@@ -142,7 +150,7 @@ const LEVELS = [
         "....HHHH",
         "........",
       ] },
-    { id: 12, name: '第10回合', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1 },
+    { id: 12, name: 'ROUND 10', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1 },
       layout: [
         "........",
         "...SS...",
