@@ -39,7 +39,7 @@ const BONUS_FLASH_DURATION = 5000;      // 闪烁阶段 5秒
 const BONUS_PLAY_DURATION = 30000;      // 翻牌阶段 30秒
 const BONUS_SETTLE_DURATION = 10000;    // 结算阶段 10秒
 const BONUS_FRUIT_COUNT = 12;           // 水果数量
-const BONUS_BOMB_COUNT = 20;            // 炸弹数量
+const BONUS_BOMB_COUNT = 12;            // 炸弹数量（2026-10-20 由 20 下调：密度 35.7%→21.4%，与水果对等）
 const BONUS_FLASH_INTERVAL = 250;       // 闪烁间隔 ms
 
 // 是否显示帧率（调试用，上线可改 false）
@@ -58,13 +58,15 @@ const TEST_TOOL_NAMES = {
 // 测试地图道具循环顺序（[I] 键循环切换）
 const TEST_ITEM_TYPES = ['banana', 'orange', 'dragonfruit', 'watermelon', 'icecream', 'time', 'hammer', 'heart', 'boom', 'flip1', 'flip2', 'cube', 'snowflake'];
 
-// 奖励关卡水果类型（与道具水果对应）
+// 奖励关卡水果类型（与道具系统水果统一，素材均在 fn-image/item/，已剔除 cherry/apple/peach）
+// weight = 随机生成权重；雪糕为固定 1 个（weight:0 不参与随机抽取）
+// 分值沿用原梯度：100 / 200 / 400 / 800 / 5000
 const BONUS_FRUIT_TYPES = {
-    cherry:     { name: '樱桃',     score: 100,  src: '../fn-image/item/cherry.png' },
-    apple:      { name: '苹果',     score: 200,  src: '../fn-image/item/apple.png' },
-    peach:      { name: '桃子',     score: 400,  src: '../fn-image/item/peach.png' },
-    watermelon: { name: '西瓜',     score: 800,  src: '../fn-image/item/watermelon.png' },
-    icecream:   { name: '雪糕',     score: 5000, src: '../fn-image/item/icecream.png' },
+    banana:     { name: '香蕉',   score: 100,  weight: 40, src: '../fn-image/item/banana.png' },
+    orange:     { name: '橙子',   score: 200,  weight: 20, src: '../fn-image/item/orange.png' },
+    dragonfruit:{ name: '火龙果', score: 400,  weight: 20, src: '../fn-image/item/dragonfruit.png' },
+    watermelon: { name: '西瓜',   score: 800,  weight: 20, src: '../fn-image/item/watermelon.png' },
+    icecream:   { name: '雪糕',   score: 5000, weight: 0,  src: '../fn-image/item/icecream.png' },
 };
 
 // ============================================
@@ -182,8 +184,8 @@ class Game {
             map.applyLayout(layout);
         }
         
-        // 初始化玩家（位置：第4列第3行）
-        player = new Player(3, 2);
+        // 初始化玩家（位置：第4列第4行）
+        player = new Player(3, 3);
         
         // 初始化/更新输入控制器（复用，不重复绑定事件）
         if (!gameInput) {
@@ -228,12 +230,12 @@ class Game {
         this._resetRoundState();
         this._bindTestCanvas();        // 绑定鼠标点击（防重复）
         
-        // 空地图（无障碍）
-        map = new Map(this.ctx);
+        // 空地图（无障碍）：skipDecor 跳过构造器默认的随机石头/箱子
+        map = new Map(this.ctx, { skipDecor: true });
         map.initEmpty();
         
         // 玩家出生
-        player = new Player(3, 2);
+        player = new Player(3, 3);
         if (!gameInput) {
             gameInput = new GameInput(player);
         } else {
@@ -377,10 +379,10 @@ class Game {
                 break;
             }
             case 'KeyF': {
-                // 一键全场怪物硬直（测试用：方便验证硬直相关逻辑/摆拍）
+                // 一键全场怪物硬直（测试用：方便验证硬直相关逻辑/摆拍）；重生闪烁预警中的怪物无敌豁免
                 let n = 0;
                 enemies.forEach(e => {
-                    if (e && e.alive) { e.stunned = ENEMY_STUN_DURATION; n++; }
+                    if (e && e.alive && (e.warning || 0) <= 0) { e.stunned = ENEMY_STUN_DURATION; n++; }
                 });
                 console.log(`[test] 一键全场怪物硬直 ×${n}`);
                 break;
@@ -720,17 +722,12 @@ class Game {
     
     // 奖励关卡渲染
     _renderBonus() {
-        // 玩家仅 playing 阶段可见
-        if (player && this.bonusPhase === 'playing') {
-            player.draw(this.ctx);
-        }
-        
         if (this.bonusPhase === 'flashing') {
             this._drawFlashingNotice();
         }
-        
+
         if (this.bonusPhase === 'playing') {
-            // 炸弹：仅翻出后才显示图标
+            // 炸弹：仅翻出后才显示图标（物件层，先画）
             this.bonusBombs.forEach(key => {
                 const [c, r] = key.split(',').map(Number);
                 const t = map.tiles[r][c];
@@ -744,7 +741,7 @@ class Game {
                     }
                 }
             });
-            // 水果：翻出后图标常驻（白底+水果图标）
+            // 水果：翻出后图标常驻（白底+水果图标；物件层，先画）
             this.bonusFruits.forEach(f => {
                 if (f.flipped) {
                     const img = this._bonusImages[f.type];
@@ -756,9 +753,14 @@ class Game {
                     }
                 }
             });
+            // 角色最后绘制（层级高于水果/炸弹物件，走格子时不会被物件盖住）
+            drawFlipAnimations();          // 翻板动画（物件之上、角色之下；原奖励关路径缺失导致动画不可见）
+            if (player) {
+                player.draw(this.ctx);
+            }
             this.drawTimer();
         }
-        
+
         if (this.bonusPhase === 'settlement') {
             this._drawSettlement();
         }
@@ -1137,14 +1139,16 @@ class Game {
         // 1个雪糕（固定）
         const ic = all.pop();
         this.bonusFruits.push({ col: ic[0], row: ic[1], type: 'icecream', flipped: false });
-        // 11个水果：樱桃40%，其余各20%
+        // 11个随机水果：按 BONUS_FRUIT_TYPES 的 weight 权重抽样（单一数据源，增删水果只改表）
         const types = [];
+        const pool = Object.entries(BONUS_FRUIT_TYPES).filter(([, v]) => v.weight > 0);
+        const weightSum = pool.reduce((s, [, v]) => s + v.weight, 0);
         for (let i = 0; i < 11; i++) {
-            const r = Math.random();
-            if (r < 0.40) types.push('banana');
-            else if (r < 0.53) types.push('orange');
-            else if (r < 0.67) types.push('dragonfruit');
-            else types.push('watermelon');
+            let r = Math.random() * weightSum;
+            for (const [type, v] of pool) {
+                r -= v.weight;
+                if (r < 0) { types.push(type); break; }
+            }
         }
         for (let i = 0; i < 11; i++) {
             const p = all.pop();
@@ -1156,6 +1160,9 @@ class Game {
             const p = all.pop();
             this.bonusBombs.add(`${p[0]},${p[1]}`);
         }
+        // [LOG] 布局清单（排查翻牌/结算问题：对照玩家翻的格子与实际身份）
+        console.log(`[Bonus][LOG] 布局生成: 水果 ${this.bonusFruits.map(f => `${BONUS_FRUIT_TYPES[f.type].name}@(${f.col},${f.row})`).join(' ')}`);
+        console.log(`[Bonus][LOG] 布局生成: 炸弹 ${[...this.bonusBombs].join(' ')}`);
     }
     
     // 进入奖励关卡
@@ -1166,7 +1173,9 @@ class Game {
         this.bonusPhaseTimer = BONUS_FLASH_DURATION;
         this.bonusFlashTick = 0;
         this.bonusFlashOn = true;
-        this.bonusCollected = { cherry: 0, apple: 0, peach: 0, watermelon: 0, icecream: 0 };
+        this.bonusCollected = {};
+        Object.keys(BONUS_FRUIT_TYPES).forEach(k => { this.bonusCollected[k] = 0; });   // 从类型表动态初始化（防键位错位）
+        this._bonusFlipCount = 0;   // [LOG] 翻牌次数统计
         
         // 清除旧地图状态
         enemies.length = 0;
@@ -1175,8 +1184,8 @@ class Game {
         items.length = 0;
         clearAllFlips();
         
-        // 空地图（无障碍）
-        map = new Map(this.ctx);
+        // 空地图（无障碍）：skipDecor 跳过构造器默认的随机石头/箱子
+        map = new Map(this.ctx, { skipDecor: true });
         map.initEmpty();
         
         // 闪烁期间不创建玩家
@@ -1205,8 +1214,12 @@ class Game {
     
     // 奖励关卡每帧更新
     _updateBonus(dt) {
+        // 翻转/动画队列推进（onBonusFlip 的翻板动画依赖；原缺失导致动画卡首帧、回普通关后白板遮挡地板）
+        updateAnimations(dt);
+        updatePendingFlips(dt);
+
         this.bonusPhaseTimer -= dt;
-        
+
         switch (this.bonusPhase) {
             case 'flashing':
                 // 闪烁12个水果格
@@ -1227,10 +1240,11 @@ class Game {
                 if (this.bonusPhaseTimer <= 0) {
                     // 进入玩牌阶段：生成玩家、恢复格子白色
                     this.bonusPhase = 'playing';
+                    console.log('[Bonus][LOG] 翻牌阶段开始（限时30秒）：走格子按 J 翻脚下格');
                     this.bonusPhaseTimer = BONUS_PLAY_DURATION;
                     this.timeLeft = BONUS_PLAY_DURATION;
                     // 创建玩家（闪烁结束后才出现）
-                    player = new Player(3, 2);
+                    player = new Player(3, 3);
                     if (gameInput) gameInput.updatePlayer(player);
                     gameInput.enabled = true;
                     // 水果格恢复白色
@@ -1256,8 +1270,13 @@ class Game {
                 
             case 'settlement':
                 if (this.bonusPhaseTimer <= 0) {
-                    // 结算结束 → 进入正常回合
-                    this._endBonusRound(false);
+                    // 结算结束 → 直接进入正常回合（原重入 _endBonusRound 会造成二次结算跳转）
+                    if (this._bonusEndTimer) { clearTimeout(this._bonusEndTimer); this._bonusEndTimer = null; }
+                    this.bonusMode = false;
+                    this.bonusBombs = new Set();
+                    this.bonusFruits = [];
+                    console.log('[Bonus][LOG] 结束: 结算到期 → 进入下一关');
+                    this._advanceToNextLevel();
                 }
                 break;
         }
@@ -1267,18 +1286,22 @@ class Game {
     onBonusFlip(col, row) {
         if (this.bonusPhase !== 'playing') return;
         const key = `${col},${row}`;
-        
+        this._bonusFlipCount = (this._bonusFlipCount || 0) + 1;
+        console.log(`[Bonus][LOG] 第${this._bonusFlipCount}次翻牌 (${col},${row}) 剩余${Math.ceil(this.timeLeft / 1000)}s 已翻水果${this.bonusFruits.filter(f => f.flipped).length}/12`);
+
         // 炸弹 → 立刻结束
         if (this.bonusBombs.has(key)) {
             const t = map.tiles[row][col];
             t.flipped = true;
             t.color = '#e94560';
             t.borderColor = '#8b0000';
+            addFlipAnimation(col, row, map.cellColor, map.borderColor, '#e94560', '#8b0000');   // 翻转动画（与普通关一致）
+            if (typeof spawnFloatText === 'function') spawnFloatText(col, row, '炸弹!', '#ff4444');   // 即时反馈：浮动文字
             console.log(`[Bonus] 💣 翻到炸弹 (${col},${row}) → 结束`);
             this._endBonusRound(true);
             return;
         }
-        
+
         // 水果 → 收集
         const fruit = this.bonusFruits.find(f => f.col === col && f.row === row && !f.flipped);
         if (fruit) {
@@ -1289,8 +1312,9 @@ class Game {
             // 背景保持白色 + 水果图标常驻，不翻成灰色
             const t = map.tiles[row][col];
             t.flipped = true;
+            addFlipAnimation(col, row, map.cellColor, map.borderColor, map.cellColor, map.borderColor);   // 白→白翻板动作（图标其上常驻）
             console.log(`[Bonus] 🍎 翻到 ${info.name} +${info.score} (${col},${row})`);
-            
+
             // 所有水果翻完 → 进入结算
             if (this.bonusFruits.every(f => f.flipped)) {
                 this._endBonusRound(false);
@@ -1303,31 +1327,37 @@ class Game {
             t.flipped = true;
             t.color = map.flippedColor;
             t.borderColor = map.flippedBorderColor;
+            addFlipAnimation(col, row, map.cellColor, map.borderColor, map.flippedColor, map.flippedBorderColor);   // 翻转动画（修复"按 J 像没反应"）
+            console.log(`[Bonus][LOG] (${col},${row}) 普通格 → 灰`);
+        } else {
+            console.log(`[Bonus][LOG] (${col},${row}) 已翻开，本次忽略`);
         }
     }
     
     // 结束奖励关卡
     _endBonusRound(fromBomb) {
+        // 幂等保护：结算进行中禁止重入（防"二次结算跳转"——settlement 到期直接推进，不走这里）
+        if (this.bonusPhase === 'settlement') return;
+        // 记录结束原因（结算面板区分文案）：炸弹 / 全收集 / 超时
+        this._bonusEndReason = fromBomb ? 'bomb'
+            : (this.bonusFruits.every(f => f.flipped) ? 'clear' : 'timeout');
         this.bonusPhase = 'settlement';
         this._settleAnimStart = performance.now();   // 结算滚动动画起点
         this.bonusPhaseTimer = BONUS_SETTLE_DURATION;
         gameInput.enabled = false;
+        // [LOG] 结束汇总（原因/翻牌次数/收集明细/得分）
+        const collectedStr = Object.entries(this.bonusCollected).filter(([, n]) => n > 0)
+            .map(([k, n]) => `${BONUS_FRUIT_TYPES[k] ? BONUS_FRUIT_TYPES[k].name : k}×${n}`).join(' ') || '无';
+        const totalGain = Object.entries(this.bonusCollected)
+            .reduce((s, [k, n]) => s + (BONUS_FRUIT_TYPES[k] ? BONUS_FRUIT_TYPES[k].score * n : 0), 0);
+        console.log(`[Bonus][LOG] 结束: 原因=${this._bonusEndReason} 翻牌${this._bonusFlipCount || 0}次 收集[${collectedStr}] 得分+${totalGain}`);
         console.log(`[Bonus] 进入结算 (炸弹:${fromBomb})`);
-        
+
         // 预加载图片
         this._preloadBonusImages();
-        
-        // 10秒后退出
-        if (this._bonusEndTimer) clearTimeout(this._bonusEndTimer);
-        this._bonusEndTimer = setTimeout(() => {
-            if (!this.bonusMode) return;
-            this.bonusMode = false;
-            this.bonusBombs = new Set();
-            this.bonusFruits = [];
-            this._bonusEndTimer = null;
-            console.log('[Bonus] 结算结束 → 进入下一关');
-            this._advanceToNextLevel();
-        }, BONUS_SETTLE_DURATION);
+
+        // 推进时机统一由 _updateBonus 的 settlement 到期处理（原 setTimeout 与结算计时器双轨并行，
+        // 会因 settlement 分支重入 _endBonusRound 造成"两次跳转结算页面"）
     }
     
     // 绘制结算面板
@@ -1343,18 +1373,21 @@ class Game {
         const elapsed = this._settleAnimStart ? (performance.now() - this._settleAnimStart) : 0;
         const ease = t => 1 - Math.pow(1 - Math.min(1, t), 3);   // easeOutCubic
 
-        // 标题
+        // 标题（按结束原因区分：全收集 CLEAR / 超时 TIME UP / 炸弹 BOOM）
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.font = `24px ${ARCADE_FONT}`;
-        ctx.fillStyle = '#ffd700';
+        let title = 'BONUS ROUND CLEAR!', titleColor = '#ffd700';
+        if (this._bonusEndReason === 'timeout') { title = 'TIME UP!'; titleColor = '#ff8a5c'; }
+        else if (this._bonusEndReason === 'bomb') { title = 'BOOM!'; titleColor = '#e94560'; }
+        ctx.fillStyle = titleColor;
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 5;
-        ctx.strokeText('BONUS ROUND CLEAR!', CANVAS_WIDTH / 2, 100);
-        ctx.fillText('BONUS ROUND CLEAR!', CANVAS_WIDTH / 2, 100);
+        ctx.strokeText(title, CANVAS_WIDTH / 2, 100);
+        ctx.fillText(title, CANVAS_WIDTH / 2, 100);
 
-        // 水果收集列表（按项渐现）
-        const fruitKeys = ['banana', 'orange', 'dragonfruit', 'watermelon', 'icecream'];
+        // 水果收集列表（按项渐现）——键位直接取自 BONUS_FRUIT_TYPES（单一数据源，杜绝错位）
+        const fruitKeys = Object.keys(BONUS_FRUIT_TYPES);
         let totalBonus = 0;
         let y = 180;
         let idx = 0;

@@ -134,10 +134,10 @@ class Item {
                 }
                 break;
             case 'hammer':
-                // 铁锤：所有怪物进入硬直状态（不立即死亡）
+                // 铁锤：所有怪物进入硬直状态（不立即死亡）；重生闪烁预警中的怪物无敌豁免
                 if (typeof enemies !== 'undefined') {
                     enemies.forEach(e => {
-                        if (e && e.alive) {
+                        if (e && e.alive && (e.warning || 0) <= 0) {
                             e.stunned = ENEMY_STUN_DURATION;
                             console.log(`[Item] 铁锤击晕 ${e.name} (${e.gridX},${e.gridY})`);
                         }
@@ -211,10 +211,10 @@ class Item {
                 }
                 break;
             case 'snow':
-                // 雪花：全体怪物冰冻 8s（铁锤 4s 的强化版）
+                // 雪花：全体怪物冰冻 8s（铁锤 4s 的强化版）；重生闪烁预警中的怪物无敌豁免
                 if (typeof enemies !== 'undefined') {
                     enemies.forEach(e => {
-                        if (e && e.alive) {
+                        if (e && e.alive && (e.warning || 0) <= 0) {
                             e.stunned = Math.max(e.stunned, 8000);
                             console.log(`[Item] 雪花冰冻 ${e.name} 8s (${e.gridX},${e.gridY})`);
                         }

@@ -323,15 +323,15 @@ class Player {
             console.log(`[Player] 受伤，手中怪物飞出 (${g.flyDx},${g.flyDy})`);
         }
         
-        // 默认重生点 (3,2)；若该格被黑洞占据（Owl 打洞）→ 改落到最近的非黑洞可通行格
-        let sx = 3, sy = 2;
-        if (typeof isBlackHole === 'function' && isBlackHole(3, 2)) {
+        // 默认重生点 (3,3)；若该格被黑洞占据（Owl 打洞）→ 改落到最近的非黑洞可通行格
+        let sx = 3, sy = 3;
+        if (typeof isBlackHole === 'function' && isBlackHole(3, 3)) {
             let best = null, bestD = Infinity;
             for (let r = 0; r < ROWS; r++) {
                 for (let c = 0; c < COLS; c++) {
                     if (!map || !map.canMoveTo(c, r) || map.hasBox(c, r)) continue;
                     if (typeof _isCellBlocked === 'function' && _isCellBlocked(c, r)) continue;
-                    const d = Math.abs(c - 3) + Math.abs(r - 2);
+                    const d = Math.abs(c - 3) + Math.abs(r - 3);
                     if (d < bestD) { bestD = d; best = [c, r]; }
                 }
             }

@@ -62,9 +62,11 @@ function updatePendingFlips(dt) {
             tile.flipped = (pf.newColor !== map.cellColor);
             
             // 翻板执行时，仅玩家翻转 → 怪物进入硬直状态（不立即消失）
+            // 重生闪烁预警中（warning>0）的怪物无敌，不可被击晕（与角色受伤无敌对齐）
             if (pf.fromPlayer && typeof enemies !== 'undefined') {
                 for (let j = enemies.length - 1; j >= 0; j--) {
                     if (enemies[j] && enemies[j].alive === true && enemies[j].stunned <= 0 &&
+                        (enemies[j].warning || 0) <= 0 &&
                         enemies[j].gridX === pf.col && enemies[j].gridY === pf.row) {
                         enemies[j].stunned = ENEMY_STUN_DURATION;
                         console.log(`[flip] 玩家翻转击晕怪物(${pf.col},${pf.row}) ${ENEMY_STUN_DURATION/1000}秒后恢复`);

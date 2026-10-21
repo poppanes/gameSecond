@@ -17,7 +17,7 @@ const FLOW_GLOW_W   = 9;     // 光晕层线宽
 const FLOW_CORE_W   = 3.2;   // 白芯层线宽
 
 class Map {
-    constructor(ctx) {
+    constructor(ctx, opts = {}) {
         this.ctx = ctx;
         this.rows = ROWS;
         this.cols = COLS;
@@ -74,8 +74,11 @@ class Map {
         this.wallGrid = this.createBoxGrid();
         
         // 放置石头和箱子（石头先放，箱子避开石头）
-        this.placeStones();
-        this.placeBoxes();
+        // skipDecor=true 时跳过（奖励关用 initEmpty 空地图，避免默认障碍的误导性日志与多余初始化）
+        if (!opts.skipDecor) {
+            this.placeStones();
+            this.placeBoxes();
+        }
     }
     
     // 创建箱子二维网格
@@ -125,7 +128,7 @@ class Map {
     _buildForbiddenSet(includeBirthNeighbors = true) {
         const forbidden = new Set([
             '0,0', `${this.cols - 1},0`, `0,${this.rows - 1}`, `${this.cols - 1},${this.rows - 1}`,  // 4个角落（怪物出生点）
-            '3,2'  // 玩家起点
+            '3,3'  // 玩家起点
         ]);
         if (includeBirthNeighbors) {
             this._forbidNeighbors(forbidden, 0, 0);
@@ -445,16 +448,23 @@ class Map {
         }
     }
     
-    // 从角色位置出发，翻转同行/同列到最近已翻转格子之间的所有方块
+    // 从角色位置出发，翻转同行/同列到最近边界格子之间的所有方块
+    // 双向模式（由玩家脚下格颜色决定）：
+    //   正翻（脚下白格）：连线白格 → 灰，最近灰格为边界（原行为）
+    //   反转（脚下灰格）：连线灰格 → 白，涟漪/翻转动画效果与正翻完全一致，最近白格为边界
     flipLine(col, row) {
-        // 1. 先扫描4个方向，记录每个方向最近已翻转格子的位置
+        // 1. 先扫描4个方向，记录每个方向最近边界格子的位置
+        const playerFlipped = this.tiles[row][col].color !== this.cellColor;
         const targets = [];
-        
+        const isBoundary = (c, r) => playerFlipped
+            ? this.tiles[r][c].color === this.cellColor       // 反转模式：白格是边界
+            : this.tiles[r][c].color !== this.cellColor;      // 正翻模式：灰格是边界
+
         // 左
         for (let c = col - 1; c >= 0; c--) {
             if (this.boxGrid[row][c] || this.stoneGrid[row][c] || this.wallGrid[row][c]) break; // 箱子/石头/墙阻挡
             if (typeof isBlackHole === 'function' && isBlackHole(c, row)) break; // 黑洞阻挡
-            if (this.tiles[row][c].color !== this.cellColor) {
+            if (isBoundary(c, row)) {
                 targets.push({ fromCol: col - 1, toCol: c, fromRow: row, toRow: row });
                 break;
             }
@@ -462,7 +472,8 @@ class Map {
         // 右
         for (let c = col + 1; c < this.cols; c++) {
             if (this.boxGrid[row][c] || this.stoneGrid[row][c] || this.wallGrid[row][c]) break;
-            if (this.tiles[row][c].color !== this.cellColor) {
+            if (typeof isBlackHole === 'function' && isBlackHole(c, row)) break; // 黑洞阻挡（原漏检，补齐）
+            if (isBoundary(c, row)) {
                 targets.push({ fromCol: col + 1, toCol: c, fromRow: row, toRow: row });
                 break;
             }
@@ -471,7 +482,7 @@ class Map {
         for (let r = row - 1; r >= 0; r--) {
             if (this.boxGrid[r][col] || this.stoneGrid[r][col] || this.wallGrid[r][col]) break;
             if (typeof isBlackHole === 'function' && isBlackHole(col, r)) break; // 黑洞阻挡
-            if (this.tiles[r][col].color !== this.cellColor) {
+            if (isBoundary(col, r)) {
                 targets.push({ fromCol: col, toCol: col, fromRow: row - 1, toRow: r });
                 break;
             }
@@ -480,15 +491,15 @@ class Map {
         for (let r = row + 1; r < this.rows; r++) {
             if (this.boxGrid[r][col] || this.stoneGrid[r][col] || this.wallGrid[r][col]) break;
             if (typeof isBlackHole === 'function' && isBlackHole(col, r)) break; // 黑洞阻挡
-            if (this.tiles[r][col].color !== this.cellColor) {
+            if (isBoundary(col, r)) {
                 targets.push({ fromCol: col, toCol: col, fromRow: row + 1, toRow: r });
                 break;
             }
         }
-        
+
         // 收集所有需要翻转的格子（含角色自身，带距离）
         const flipCells = [{ col, row, playerTile: true, dist: 0 }];
-        
+
         targets.forEach(({ fromCol, toCol, fromRow, toRow }) => {
             if (fromRow === toRow) {
                 const step = toCol > fromCol ? 1 : -1;
@@ -508,26 +519,18 @@ class Map {
                 }
             }
         });
-        
-        // 涟漪延迟：距离越远，延迟越大
-        flipCells.forEach(({ col, row, playerTile, dist }) => {
+
+        // 涟漪延迟：距离越远，延迟越大；目标色统一（正翻全灰 / 反转全白）
+        flipCells.forEach(({ col, row, dist }) => {
             const tile = this.tiles[row][col];
             const oldColor = tile.color;
             const oldBorder = tile.borderColor;
-            
-            let newColor, newBorder;
-            if (playerTile) {
-                // 用实际颜色判断（不用 tile.flipped，避免怪物翻转导致 flipped 与颜色不同步）
-                const isFlipped = tile.color !== this.cellColor;
-                newColor = isFlipped ? this.cellColor : this.flippedColor;
-                newBorder = isFlipped ? this.borderColor : this.flippedBorderColor;
-            } else {
-                newColor = this.flippedColor;
-                newBorder = this.flippedBorderColor;
-            }
-            
+
+            const newColor = playerFlipped ? this.cellColor : this.flippedColor;
+            const newBorder = playerFlipped ? this.borderColor : this.flippedBorderColor;
+
             const delay = FLIP_DELAY + dist * RIPPLE_STEP;
-            addPendingFlip(col, row, oldColor, oldBorder, newColor, newBorder, playerTile, delay, true);
+            addPendingFlip(col, row, oldColor, oldBorder, newColor, newBorder, true, delay, true);
         });
     }
     
@@ -895,10 +898,21 @@ class Map {
         ctx.shadowBlur = 2;
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
-                if (this.tiles[row][col].color === this.cellColor) continue;   // 只画已翻格
+                const tile = this.tiles[row][col];
+                if (tile.color === this.cellColor) continue;   // 只画已翻格
                 ctx.drawImage(this.pigStamp,
                     this.offsetX + col * this.cellSize, this.offsetY + row * this.cellSize,
                     this.cellSize, this.cellSize);
+                // 炸弹格：猪头纹路染红（#e94560 为奖励关炸弹专属色，普通关无此色格 → 天然只在奖励关生效）
+                if (tile.color === '#e94560') {
+                    ctx.save();
+                    ctx.globalAlpha = 0.55;
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = '#e94560';
+                    ctx.fillRect(this.offsetX + col * this.cellSize, this.offsetY + row * this.cellSize,
+                        this.cellSize, this.cellSize);
+                    ctx.restore();
+                }
             }
         }
         ctx.restore();
