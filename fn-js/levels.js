@@ -52,12 +52,22 @@ const TIER_TIME = {
 //   ② 字符网格：layout 为 7 行 × 8 列字符串，'.'=空地  'S'=石头  'B'=箱子  '#'=墙(空气墙)  'H'=黑洞
 //      例：layout: ["........", "....S...", "...#.#H.", ...]
 // 网格坐标系：col 取 0~7（列），row 取 0~6（行）。
-// 禁区（自动跳过，无需避开）：四角出生点(0,0)(7,0)(0,6)(7,6)及相邻格、玩家起点(3,3)。
+// 禁区（自动跳过，无需避开）：四角出生点(0,0)(7,0)(0,6)(7,6)及相邻格、玩家起点(3,3)
+// 传送门（可选配置）：关卡对象加 portals 门对数组，每对双向互通
+//   { a: [0,2], b: [7,5] }  → 水平门：站 (0,2) 按左 → 到 (7,5)；站 (7,5) 按右 → 回 (0,2)
+//   { a: [3,0], b: [3,6] }  → 垂直门：顶格按上 → 底格；底格按下 → 顶格
+//   { a: [0,5], b: [4,3] }  → 不对等：左门 → 内部出口 (4,3)（内部格端单向，只进不出）
+//   触发方向自动推导（端点在边缘：左门按左/顶门按上...）；可显式 { col, row, enter, face } 覆盖
+//   规则：15 回合内的关卡不要配置；之后按关卡需求添加
+// 传送门（可选配置）：关卡对象加 portals: [行号数组]（左右两侧成对开启）
+//   效果：该行左右边缘出现门标记，角色/怪物站在门格(col 0 或 col 7)按朝外方向键 → 瞬移到对侧门格
+//   规则：15 回合内的关卡不要配置；之后按关卡需求添加，如 { id: 16, ..., portals: [2, 5] }。
 // 墙 = 空气墙：不可通行、不可翻转、豁免通关；WALL_VISIBLE 控制是否可见（见文件顶部）。
 // 黑洞 = 地形黑洞：不可通行、不可翻转、豁免通关，怪物/玩家/箱子都无法进入。
 // 特殊关卡（type:'bonus'）不使用布局，走 initEmpty 全白地板。
 // ============================================
 const LEVELS = [
+    //1
     { id: 1,  name: 'ROUND 1', type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
       layout: [
         "........",
@@ -68,6 +78,7 @@ const LEVELS = [
         "........",
         "........",
       ] },
+    //2
     { id: 2,  name: 'ROUND 2', type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
       layout: [
         "........",
@@ -78,6 +89,7 @@ const LEVELS = [
         ".S....S.",
         "........",
       ] },
+    //3
     { id: 3,  name: 'ROUND 3', type: 'normal', tier: 1, enemies: { Ghost: 1, Spider: 1 },
       layout: [
         "........",
@@ -88,6 +100,7 @@ const LEVELS = [
         "..SSS...",
         "........",
       ] },
+    //4
     { id: 4,  name: 'ROUND 4', type: 'normal', tier: 1, enemies: { Ghost: 2, Spider: 1 },
       layout: [
         "........",
@@ -98,7 +111,9 @@ const LEVELS = [
         "..B..S..",
         "........",
       ] },
+    //Y1
     { id: 5,  name: 'BONUS 1', type: 'bonus', tier: 1 },
+    //5
     { id: 6,  name: 'ROUND 5', type: 'normal', tier: 1, enemies: { Ghost: 2, Spider: 1 },
       layout: [
         "........",
@@ -109,6 +124,7 @@ const LEVELS = [
         "........",
         "........",
       ] },
+    //6
     { id: 7,  name: 'ROUND 6', type: 'normal', tier: 2, enemies: { Ghost: 1, Spider: 1, Snowman: 1 },
       layout: [
         "........",
@@ -119,6 +135,7 @@ const LEVELS = [
         "....BSS.",
         "........",
       ] },
+    //7
     { id: 8,  name: 'ROUND 7', type: 'normal', tier: 2, enemies: { Owl: 1, Spider: 1, Snowman: 1 },
       layout: [
         "........",
@@ -129,6 +146,7 @@ const LEVELS = [
         "........",
         "....H...",
       ] },
+    //8
     { id: 9,  name: 'ROUND 8', type: 'normal', tier: 2, enemies: { Octopus: 1, Spider: 1, Ghost: 1 },
       layout: [
         "........",
@@ -139,7 +157,9 @@ const LEVELS = [
         "...BS...",
         "........",
       ] },
+    //Y2
     { id: 10, name: 'BONUS 2', type: 'bonus', tier: 2 },
+    //9
     { id: 11, name: 'ROUND 9', type: 'normal', tier: 2, enemies: { Octopus: 1, Spider: 1, Ghost: 1 },
       layout: [
         "........",
@@ -150,6 +170,7 @@ const LEVELS = [
         "....HHHH",
         "........",
       ] },
+    //10
     { id: 12, name: 'ROUND 10', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1 },
       layout: [
         "........",
@@ -159,6 +180,236 @@ const LEVELS = [
         "....S...",
         "...S....",
         "...S....",
+      ] },
+    //11
+    { id: 13, name: 'ROUND 11', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1 },
+      layout: [
+        ".....S..",
+        ".....H..",
+        ".S...H..",
+        ".SH.HH..",
+        "..H..S..",
+        "..H.....",
+        "..H.S...",
+      ] },
+    //12
+    { id: 14, name: 'ROUND 12', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 2 },
+      layout: [
+        "........",
+        "..SBSBS.",
+        ".S......",
+        "..S.S.S.",
+        ".S......",
+        "..SBSBS.",
+        "........",
+      ] },
+    //Y3
+    { id: 15, name: 'BONUS 3', type: 'bonus', tier: 2 },
+    //13
+    { id: 16, name: 'ROUND 13', type: 'normal', tier: 2, enemies: { Spider: 1, Octopus: 1, Snowman: 1 },
+      layout: [
+        "........",
+        "....B...",
+        "....B...",
+        "....B...",
+        ".B.SSSB.",
+        "........",
+        "....B...",
+      ] },
+    //14
+    { id: 17, name: 'ROUND 14', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1, Octopus: 1 },
+      layout: [
+        "........",
+        ".SBB....",
+        ".B......",
+        ".SB.SBB.",
+        ".B..B...",
+        "....SB..",
+        "....B...",
+      ] },
+    //15
+    { id: 18, name: 'ROUND 15', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Owl: 1 }, portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        "..SS.SS.",
+        ".S....S.",
+        "......S.",
+        "..BBBB..",
+        "........",
+        "........",
+      ] },
+    //16
+    { id: 19, name: 'ROUND 16', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Snowman: 1 }, portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        ".S..S.B.",
+        ".B.B....",
+        ".SS...B.",
+        ".B.B....",
+        ".S..S.B.",
+        "........",
+      ] },
+    //Y4
+    { id: 20, name: 'BONUS 4', type: 'bonus', tier: 2 },
+    //17
+    { id: 21, name: 'ROUND 17', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Snowman: 1  },portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        "..S..SB.",
+        ".SHH.H..",
+        "..B..B..",
+        "..H.HHS.",
+        ".BS..S..",
+        "........",
+      ] },
+    //18
+    { id: 22, name: 'ROUND 18', type: 'normal', tier: 2, enemies: { Octopus: 1, Snowman: 2 },portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        "..S..S..",
+        ".B....B.",
+        ".S....S.",
+        ".B....B.",
+        "..S..S..",
+        "........",
+      ] },
+    //19
+    { id: 23, name: 'ROUND 19', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1, Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "...H....",
+        "...H....",
+        "..BHH.HH",
+        "....H.H.",
+        "..BH...B",
+        "...H....",
+        "...H....",
+      ] },
+    //20
+    { id: 24, name: 'ROUND 20', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Snowman: 2 },portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        "........",
+        "SSBSSBBS",
+        "........",
+        "SBSSBSSB",
+        "........",
+        "........",
+      ] },
+    //Y5
+    { id: 25, name: 'BONUS 5', type: 'bonus', tier: 2 },
+    //21
+    { id: 26, name: 'ROUND 21', type: 'normal', tier: 2, enemies: {Ghost: 1, Octopus: 1, Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "..S.....",
+        ".S..B...",
+        "..B.SBS.",
+        "BS....B.",
+        ".SSSS.SS",
+        ".S..B...",
+        "........",
+      ] },
+    //22
+    { id: 27, name: 'ROUND 22', type: 'normal', tier: 2, enemies: { Spider: 1, Owl: 1, Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "....B...",
+        "....S...",
+        "..BBS.SB",
+        "....S.B.",
+        "..BBS.SB",
+        "....S...",
+        "....B...",
+      ] },
+    //23
+    { id: 28, name: 'ROUND 23', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Snowman: 1 },portals:[(0,1),(7,1),(0,5),(7,5)],
+      layout: [
+        "...S....",
+        "...S....",
+        "SSS.....",
+        ".....SSB",
+        "B..BS...",
+        ".BB.S...",
+        "....S...",
+      ] },
+    //24
+    { id: 29, name: 'ROUND 24', type: 'normal', tier: 2, enemies: { Spider: 1, Octopus: 1, Snowman: 1 },portals:[(0,1),(7,1),(0,5),(7,5)],
+      layout: [
+        ".....B..",
+        "..SSSSS.",
+        "..B.....",
+        "..S.....",
+        "..B.....",
+        "..SSSSS.",
+        ".....B..",
+      ] },
+    //Y6
+    { id: 30, name: 'BONUS 6', type: 'bonus', tier: 2 },
+    //25
+    { id: 31, name: 'ROUND 25', type: 'normal', tier: 2, enemies: { Spider: 1, Octopus: 1, Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "..S..S..",
+        "..B..B..",
+        "...SB...",
+        "........",
+        "...BS...",
+        "..B..B..",
+        "..S..S..",
+      ] },
+    //26
+    { id: 32, name: 'ROUND 26', type: 'normal', tier: 2, enemies: { Octopus: 2, Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        "..BBBB..",
+        "........",
+        ".B....B.",
+        "........",
+        "..BBBB..",
+        "........",
+      ] },
+    //27
+    { id: 33, name: 'ROUND 27', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1, Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "........",
+        "..B.....",
+        ".BSB....",
+        "..B..B..",
+        "....BSB.",
+        ".....B..",
+        "........",
+      ] },
+    //28
+    { id: 34, name: 'ROUND 28', type: 'normal', tier: 2, enemies: { Spider: 1, Ghost: 1, Snowman: 1 },portals:[(0,1),(7,1),(0,5),(7,5)],
+      layout: [
+        "..S..S..",
+        ".S....S.",
+        "..SBS...",
+        "BS...B..",
+        "..S..S..",
+        "...S.S..",
+        "....S...",
+      ] },
+    //Y7
+    { id: 35, name: 'BONUS 7', type: 'bonus', tier: 2 },
+    //29
+    { id: 36, name: 'ROUND 29', type: 'normal', tier: 2, enemies: { Owl: 2,Snowman: 1 },portals:[(0,3),(7,3)],
+      layout: [
+        "....H...",
+        ".....B..",
+        ".S..H...",
+        ".B..H...",
+        "....H...",
+        "...B....",
+        "....H...",
+      ] },
+    //30
+    { id: 37, name: 'ROUND 30', type: 'normal', tier: 2, enemies: { Spider: 1, Snowman: 2 },
+      layout: [
+        "..H.S...",
+        "..H..B..",
+        ".SSS....",
+        "........",
+        ".B....S.",
+        ".HHH.S..",
+        ".....B..",
       ] },
 ];
 

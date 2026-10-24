@@ -150,6 +150,23 @@ class Enemy {
         return true;
     }
 
+    // [传送门] AI 移动步解析：站门格时，朝端点 enter 方向的"出界步"重定向到对侧门格（传送步）
+    // commit=true 实际应用阶段（设置传送冷却）；false 为试探（方向过滤阶段，不设冷却）
+    // allowPortal=false 时出界步不重定向（Octopus 非追踪态随机乱走不触发传送——需有朝外意图才传）
+    _resolveStep(dx, dy, commit = false, allowPortal = true) {
+        const nx = this.gridX + dx, ny = this.gridY + dy;
+        if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) return { col: nx, row: ny, wrapped: false };
+        if (!allowPortal) return { col: nx, row: ny, wrapped: false };
+        if (map && typeof map.findPortal === 'function') {
+            const dest = map.findPortal(this.gridX, this.gridY, dx, dy);
+            if (dest && (this.portalCdUntil || 0) <= performance.now()) {
+                if (commit) this.portalCdUntil = performance.now() + 3000;
+                return { col: dest.col, row: dest.row, wrapped: true };
+            }
+        }
+        return { col: nx, row: ny, wrapped: false };
+    }
+
     /* ---- 被箱子推动 ---- */
     pushTo(newCol, newRow) {
         this.gridX = newCol;
@@ -531,8 +548,9 @@ class Ghost extends Enemy {
             // 其次：寻路到远处的已翻转地板 / 玩家
             const dir = this.findPath();
             if (dir) {
-                const nx = this.gridX + dir.dx;
-                const ny = this.gridY + dir.dy;
+                const st = this._resolveStep(dir.dx, dir.dy, true);   // [传送门] 出界步重定向对侧
+                const nx = st.col;
+                const ny = st.row;
                 // 下一格有箱子/被怪物占据/是黑洞 → 改为自由游荡（不原地罚站）
                 if ((map && map.hasBox(nx, ny)) || _isCellBlocked(nx, ny, this) || isBlackHole(nx, ny)) {
                     this._wanderRandomly();
@@ -540,9 +558,18 @@ class Ghost extends Enemy {
                 }
                 this.gridX = nx;
                 this.gridY = ny;
-                this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
-                this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
-                this.isMoving = true;
+                if (st.wrapped) {
+                    // 传送瞬移：pixel 直接落位对侧（与玩家一致）
+                    this.pixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+                    this.pixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+                    this.targetPixelX = this.pixelX;
+                    this.targetPixelY = this.pixelY;
+                    this.isMoving = false;
+                } else {
+                    this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+                    this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+                    this.isMoving = true;
+                }
             } else {
                 // 无任何目标（无翻板格且玩家不可达/同格）→ 自由游荡
                 this._wanderRandomly();
@@ -551,20 +578,39 @@ class Ghost extends Enemy {
     }
 
     /* ---- 自由游荡：随机走一步（避开黑洞/障碍/怪物），节奏比追击慢 ---- */
+    /* 传送门：站门格时"朝外步"经 _resolveStep 重定向到对侧门格（怪物主动走向门外才会传送） */
     _wanderRandomly() {
         const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
         const valid = dirs.filter(([dx,dy]) => {
-            const nx = this.gridX + dx, ny = this.gridY + dy;
-            return nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && map &&
-                !map.hasStone(nx, ny) && !map.hasBox(nx, ny) && !map.hasWall(nx, ny) &&
-                !isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this);
+            const st = this._resolveStep(dx, dy);   // 试探（不设冷却）
+            return st.col >= 0 && st.col < COLS && st.row >= 0 && st.row < ROWS && map &&
+                !map.hasStone(st.col, st.row) && !map.hasBox(st.col, st.row) && !map.hasWall(st.col, st.row) &&
+                !isBlackHole(st.col, st.row) && !_isCellBlocked(st.col, st.row, this);
         });
         if (valid.length === 0) { this.moveCooldown = 400; return; }   // 完全被困，稍后重试
-        const [dx, dy] = valid[Math.floor(Math.random() * valid.length)];
-        this.gridX += dx; this.gridY += dy;
-        this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
-        this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
-        this.isMoving = true;
+        // 加权随机：站门端点时，穿门步（wrapped）权重 ×3（选择概率 25%→50%，怪物更愿意穿门）
+        const weighted = [];
+        valid.forEach(([dx, dy]) => {
+            const stp = this._resolveStep(dx, dy);
+            const w = (stp.wrapped && map.isPortalEnd(this.gridX, this.gridY)) ? 3 : 1;
+            for (let k = 0; k < w; k++) weighted.push([dx, dy]);
+        });
+        const [dx, dy] = weighted[Math.floor(Math.random() * weighted.length)];
+        const st = this._resolveStep(dx, dy, true);   // 应用（设置传送冷却）
+        this.gridX = st.col; this.gridY = st.row;
+        if (st.wrapped) {
+            // 传送瞬移：pixel 直接落位对侧门格（与玩家传送一致，无跨场滑动）
+            this.pixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+            this.pixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+            this.targetPixelX = this.pixelX;
+            this.targetPixelY = this.pixelY;
+            this.isMoving = false;
+        } else {
+            // 普通步：滑动到目标格
+            this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+            this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+            this.isMoving = true;
+        }
         this.moveCooldown = getBoostedInterval(2500);   // 游荡节奏：每秒最多走一格（悠闲感）
     }
 
@@ -753,15 +799,25 @@ class Spider extends Enemy {
             this.moveTimer = 0;
             const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
             const valid = dirs.filter(([dx,dy]) => {
-                const nx=this.gridX+dx, ny=this.gridY+dy;
-                return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
+                const st = this._resolveStep(dx, dy);   // [传送门] 出界步重定向
+                return st.col>=0&&st.col<COLS&&st.row>=0&&st.row<ROWS && map&&!map.hasStone(st.col,st.row)&&!map.hasBox(st.col,st.row)&&!map.hasWall(st.col,st.row)&&!isBlackHole(st.col,st.row)&&!_isCellBlocked(st.col,st.row,this);
             });
             if (valid.length>0) {
                 const [dx,dy] = valid[Math.floor(Math.random()*valid.length)];
-                this.gridX+=dx; this.gridY+=dy;
-                this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
-                this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
-                this.isMoving=true;
+                const st = this._resolveStep(dx, dy, true);
+                this.gridX=st.col; this.gridY=st.row;
+                if (st.wrapped) {
+                    // 传送瞬移：pixel 直接落位对侧
+                    this.pixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                    this.pixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                    this.targetPixelX=this.pixelX;
+                    this.targetPixelY=this.pixelY;
+                    this.isMoving=false;
+                } else {
+                    this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                    this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                    this.isMoving=true;
+                }
             }
         }
         // 平滑移动
@@ -860,13 +916,23 @@ class Snowman extends Enemy {
             // 狂暴：BFS 追击玩家
             const dir = this.findPath();
             if (dir) {
-                const nx = this.gridX + dir.dx;
-                const ny = this.gridY + dir.dy;
+                const st = this._resolveStep(dir.dx, dir.dy, true);   // [传送门] 出界步重定向
+                const nx = st.col;
+                const ny = st.row;
                 if (!isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this)) {
-                    this.gridX += dir.dx; this.gridY += dir.dy;
-                    this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
-                    this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
-                    this.isMoving = true;
+                    this.gridX = nx; this.gridY = ny;
+                    if (st.wrapped) {
+                        // 传送瞬移：pixel 直接落位对侧
+                        this.pixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                        this.pixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                        this.targetPixelX=this.pixelX;
+                        this.targetPixelY=this.pixelY;
+                        this.isMoving = false;
+                    } else {
+                        this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                        this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                        this.isMoving = true;
+                    }
                     this.moveCooldown = getBoostedInterval(200);
                 }
             }
@@ -876,13 +942,23 @@ class Snowman extends Enemy {
             if (target) {
                 const dir = this._bfsStep(target);
                 if (dir) {
-                    const nx = this.gridX + dir.dx;
-                    const ny = this.gridY + dir.dy;
+                    const st = this._resolveStep(dir.dx, dir.dy, true);   // [传送门] 出界步重定向
+                    const nx = st.col;
+                    const ny = st.row;
                     if (!isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this)) {
-                        this.gridX += dir.dx; this.gridY += dir.dy;
-                        this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
-                        this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
-                        this.isMoving = true;
+                        this.gridX = nx; this.gridY = ny;
+                        if (st.wrapped) {
+                            // 传送瞬移：pixel 直接落位对侧
+                            this.pixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                            this.pixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                            this.targetPixelX=this.pixelX;
+                            this.targetPixelY=this.pixelY;
+                            this.isMoving = false;
+                        } else {
+                            this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                            this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                            this.isMoving = true;
+                        }
                         this.moveCooldown = getBoostedInterval(400);
                         return;
                     }
@@ -891,15 +967,25 @@ class Snowman extends Enemy {
             // 无目标则随机走
             const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
             const valid = dirs.filter(([dx,dy]) => {
-                const nx=this.gridX+dx, ny=this.gridY+dy;
-                return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS && map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
+                const st = this._resolveStep(dx, dy);   // [传送门] 出界步重定向
+                return st.col>=0&&st.col<COLS&&st.row>=0&&st.row<ROWS && map&&!map.hasStone(st.col,st.row)&&!map.hasBox(st.col,st.row)&&!map.hasWall(st.col,st.row)&&!isBlackHole(st.col,st.row)&&!_isCellBlocked(st.col,st.row,this);
             });
             if (valid.length>0) {
                 const [dx,dy] = valid[Math.floor(Math.random()*valid.length)];
-                this.gridX+=dx; this.gridY+=dy;
-                this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
-                this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
-                this.isMoving=true;
+                const st = this._resolveStep(dx, dy, true);
+                this.gridX=st.col; this.gridY=st.row;
+                if (st.wrapped) {
+                    // 传送瞬移：pixel 直接落位对侧
+                    this.pixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                    this.pixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                    this.targetPixelX=this.pixelX;
+                    this.targetPixelY=this.pixelY;
+                    this.isMoving=false;
+                } else {
+                    this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                    this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                    this.isMoving=true;
+                }
                 this.moveCooldown=getBoostedInterval(400);
             }
         }
@@ -1028,8 +1114,10 @@ class Octopus extends Enemy {
         
         let moved = false;
         for (const [dx, dy] of tryDirs) {
-            const nx=this.gridX+dx, ny=this.gridY+dy;
-            // 越界
+            // [传送门] 出界步重定向对侧（与其他怪物一致：任意移动状态都可传送）
+            const st = this._resolveStep(dx, dy, true);
+            const nx=st.col, ny=st.row;
+            // 越界（含未匹配传送门的出界步）
             if (nx<0||nx>=COLS||ny<0||ny>=ROWS) continue;
             // 石头或墙或黑洞或被怪物占据
             if (map && (map.hasStone(nx,ny) || map.hasWall(nx,ny) || isBlackHole(nx,ny))) continue;
@@ -1047,9 +1135,18 @@ class Octopus extends Enemy {
                 moved = true;
             } else {
                 this.gridX=nx; this.gridY=ny;
-                this.targetPixelX=OFFSET_X+nx*CELL_SIZE+BORDER_WIDTH;
-                this.targetPixelY=OFFSET_Y+ny*CELL_SIZE+BORDER_WIDTH;
-                this.isMoving=true;
+                if (st.wrapped) {
+                    // 传送瞬移：pixel 直接落位对侧门格（与玩家/其他怪物一致，无跨场滑动）
+                    this.pixelX=OFFSET_X+nx*CELL_SIZE+BORDER_WIDTH;
+                    this.pixelY=OFFSET_Y+ny*CELL_SIZE+BORDER_WIDTH;
+                    this.targetPixelX=this.pixelX;
+                    this.targetPixelY=this.pixelY;
+                    this.isMoving=false;
+                } else {
+                    this.targetPixelX=OFFSET_X+nx*CELL_SIZE+BORDER_WIDTH;
+                    this.targetPixelY=OFFSET_Y+ny*CELL_SIZE+BORDER_WIDTH;
+                    this.isMoving=true;
+                }
                 moved = true;
             }
             break;  // 成功移动，结束尝试
@@ -1146,9 +1243,9 @@ class Owl extends Enemy {
         this.moveTimer = 0;
         const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
         const valid = dirs.filter(([dx,dy]) => {
-            const nx=this.gridX+dx, ny=this.gridY+dy;
-            return nx>=0&&nx<COLS&&ny>=0&&ny<ROWS &&
-                map&&!map.hasStone(nx,ny)&&!map.hasBox(nx,ny)&&!map.hasWall(nx,ny)&&!isBlackHole(nx,ny)&&!_isCellBlocked(nx,ny,this);
+            const st = this._resolveStep(dx, dy);   // [传送门] 出界步重定向
+            return st.col>=0&&st.col<COLS&&st.row>=0&&st.row<ROWS &&
+                map&&!map.hasStone(st.col,st.row)&&!map.hasBox(st.col,st.row)&&!map.hasWall(st.col,st.row)&&!isBlackHole(st.col,st.row)&&!_isCellBlocked(st.col,st.row,this);
         });
 
         // 完全被困：传送到一个随机可通行位置
@@ -1176,10 +1273,20 @@ class Owl extends Enemy {
         
         if (valid.length>0) {
             const [dx,dy] = valid[Math.floor(Math.random()*valid.length)];
-            this.gridX+=dx; this.gridY+=dy;
-            this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
-            this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
-            this.isMoving=true;
+            const st = this._resolveStep(dx, dy, true);
+            this.gridX=st.col; this.gridY=st.row;
+            if (st.wrapped) {
+                // 传送瞬移：pixel 直接落位对侧
+                this.pixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                this.pixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                this.targetPixelX=this.pixelX;
+                this.targetPixelY=this.pixelY;
+                this.isMoving=false;
+            } else {
+                this.targetPixelX=OFFSET_X+this.gridX*CELL_SIZE+BORDER_WIDTH;
+                this.targetPixelY=OFFSET_Y+this.gridY*CELL_SIZE+BORDER_WIDTH;
+                this.isMoving=true;
+            }
         }
     }
 

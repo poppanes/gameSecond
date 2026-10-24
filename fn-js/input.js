@@ -97,7 +97,7 @@ class GameInput extends InputHandler {
         if (game && game.testMode) {
             const testKeys = ['Digit1','Digit2','Digit3','Digit4','Digit5',
                               'KeyQ','KeyE','KeyR','KeyT','KeyC','KeyG','KeyF',
-                              'KeyI',
+                              'KeyI','KeyP',
                               'Escape','Backspace'];
             if (testKeys.includes(code)) {
                 game.testKeyDown(code);

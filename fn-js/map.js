@@ -62,6 +62,7 @@ class Map {
         this.boxFrameMs = 1000 / 12;                   // 12fps（定版口径）
         this.boxGrid = this.createBoxGrid();
         this.boxNeverPushed = new Set();  // 未被推动的箱子所在格，不计入通关
+        this.portals = [];                // 传送门端点数组（normalizePair 生成，含 peer 互指；空 = 无传送门）
         
         // 石头系统
         this.stoneImage = new Image();
@@ -603,6 +604,13 @@ class Map {
         if (this.hasBox(col, row)) return true;     // 箱子可被推动
         return tile.type !== 'wall' && tile.type !== 'obstacle';
     }
+
+    // [传送门] 传送目标格可用性：仅实体障碍封锁（箱子/石头/墙/黑洞——对端被障碍占则传送门失效）
+    // 怪物不封锁传送门：玩家可传送到怪物格交互（同格触发碰撞，按现有机制玩家受伤——风险自负）
+    isPortalDestFree(col, row, entity = null) {
+        if (!this.canMoveTo(col, row) || this.hasBox(col, row)) return false;
+        return true;
+    }
     
     // 奖励关卡专用：清空所有障碍物，全白地板
     initEmpty() {
@@ -915,6 +923,209 @@ class Map {
                 }
             }
         }
+        ctx.restore();
+    }
+
+    // ===== 传送门（通用门对模型：行/列/不对等传送；levels.js 可选配置，15 回合内不配置）=====
+    // 配置：portals: [{ a: [0,2], b: [7,5] }, { a: [3,0], b: [3,6] }, { a: [0,5], b: [4,3] }, ...]
+    //   每对双向互通；端点在边缘（col 0/7、row 0/6）时触发方向自动推导（左门按左、顶门按上...）
+    //   端点在内部格 = 单向出口（只进不出，出口朝向 = 穿门方向延续）；可显式给 { col, row, enter, face }
+    setPortals(cfg) {
+        if (!Array.isArray(cfg)) { this.portals = []; return; }
+        // 旧行格式兼容：[2, 5] → 每行生成左右对称水平门对
+        if (cfg.length > 0 && cfg.every(x => typeof x === 'number')) {
+            this.portals = [];
+            cfg.forEach(r => {
+                const pair = this._normalizePair({ a: [0, r], b: [this.cols - 1, r] });
+                if (pair) this.portals.push(...pair);
+            });
+            return;
+        }
+        this.portals = [];
+        cfg.forEach(p => {
+            const pair = this._normalizePair(p);
+            if (pair) this.portals.push(...pair);
+        });
+    }
+    // 兼容接口：行数组 → 左右对称水平门对（测试地图 KeyP 使用）
+    setPortalRows(rows) {
+        this.setPortals(Array.isArray(rows) ? rows.filter(r => Number.isInteger(r)) : []);
+    }
+    isPortalRow(row) { return this.portals.some(p => p.row === row); }
+    _normEnd(end) {
+        const col = Array.isArray(end) ? end[0] : end.col;
+        const row = Array.isArray(end) ? end[1] : end.row;
+        if (!Number.isInteger(col) || !Number.isInteger(row)) return null;
+        if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return null;
+        let enter = Array.isArray(end.enter) ? end.enter : null;
+        const face = Array.isArray(end.face) ? end.face : null;
+        if (!enter) {
+            if (col === 0) enter = [-1, 0];
+            else if (col === this.cols - 1) enter = [1, 0];
+            else if (row === 0) enter = [0, -1];
+            else if (row === this.rows - 1) enter = [0, 1];
+        }
+        return { col, row, enter, face };
+    }
+    _normalizePair(p) {
+        if (!p || !p.a || !p.b) return null;
+        const A = this._normEnd(p.a);
+        const B = this._normEnd(p.b);
+        if (!A || !B) return null;
+        // 出口朝向：默认 = 对端 enter 的反向（穿门后沿原方向走出）；对端为内部单向出口时 = 自身 enter 反向
+        A.face = A.face || (B.enter ? [-B.enter[0], -B.enter[1]] : (A.enter ? [-A.enter[0], -A.enter[1]] : [1, 0]));
+        B.face = B.face || (A.enter ? [-A.enter[0], -A.enter[1]] : (B.enter ? [-B.enter[0], -B.enter[1]] : [-1, 0]));
+        const pa = { col: A.col, row: A.row, enter: A.enter, face: A.face };
+        const pb = { col: B.col, row: B.row, enter: B.enter, face: B.face };
+        pa.peer = pb; pb.peer = pa;   // 互相指向对端（传送目标）
+        return [pa, pb];
+    }
+    // 玩家传送查询：站格 + 移动方向精确匹配端点 enter → 返回对端 { col, row, face }
+    findPortal(col, row, dx, dy) {
+        for (const p of this.portals) {
+            if (p.col === col && p.row === row && p.enter &&
+                p.enter[0] === dx && p.enter[1] === dy) {
+                return { col: p.peer.col, row: p.peer.row, face: p.peer.face };
+            }
+        }
+        return null;
+    }
+    // 怪物传送查询：站格即穿（方向不限；内部单向出口端无 enter 不触发）
+    findPortalAt(col, row) {
+        for (const p of this.portals) {
+            if (p.col === col && p.row === row && p.enter) {
+                return { col: p.peer.col, row: p.peer.row };
+            }
+        }
+        return null;
+    }
+    // 是否为可触发的门端点（有 enter 的端点；内部单向出口端无 enter 不算）
+    isPortalEnd(col, row) {
+        return this.portals.some(p => p.col === col && p.row === row && p.enter);
+    }
+    _portalEdge(p) {
+        if (p.col === 0) return 'left';
+        if (p.col === this.cols - 1) return 'right';
+        if (p.row === 0) return 'top';
+        if (p.row === this.rows - 1) return 'bottom';
+        return null;   // 内部端（单向出口）
+    }
+    // 绘制编排：边缘端画边框外门区（水平=左右/垂直=上下），内部端画格内漩涡标记
+    drawPortals(now) {
+        if (!this.portals.length) return;
+        const ctx = this.ctx;
+        ctx.save();
+        const doorW = 44, doorH = this.cellSize - 10;
+        this.portals.forEach(p => {
+            const edge = this._portalEdge(p);
+            const cx = this.offsetX + p.col * this.cellSize + this.cellSize / 2;
+            const cy = this.offsetY + p.row * this.cellSize + this.cellSize / 2;
+            const pulse = 0.5 + 0.5 * Math.sin(now / 260 + p.col + p.row);
+            // 对端被占（箱子/石头/墙/黑洞/怪物）→ 门区红色提示（传送失效；推走后自动恢复）
+            const destFree = this.isPortalDestFree(p.peer.col, p.peer.row, null);
+            if (edge === 'left' || edge === 'right') {
+                const x0 = edge === 'left' ? this.offsetX - doorW - 4 : this.offsetX + GRID_WIDTH + 4;
+                const tip = edge === 'left' ? 1 : -1;
+                this._drawDoorH(ctx, x0, cy - doorH / 2, doorW, doorH, now, tip, pulse, destFree);
+            } else if (edge === 'top' || edge === 'bottom') {
+                const y0 = edge === 'top' ? this.offsetY - doorH - 4 : this.offsetY + GRID_HEIGHT + 4;
+                const tip = edge === 'top' ? 1 : -1;
+                this._drawDoorV(ctx, cx - (this.cellSize - 10) / 2, y0, this.cellSize - 10, doorH, now, tip, pulse, destFree);
+            } else {
+                this._drawPortalMark(ctx, cx, cy, now, pulse);   // 内部单向出口：格内标记
+            }
+        });
+        ctx.restore();
+    }
+    // 水平门区（左右边缘）：底光 + 描边 + 光点 + chevron（尖朝地图内）；destFree=false 对端被占 → 红色描边提示
+    _drawDoorH(ctx, x0, y0, doorW, doorH, now, tip, pulse, destFree = true) {
+        const cy = y0 + doorH / 2;
+        const ccx = x0 + doorW / 2;
+        const grad = ctx.createRadialGradient(ccx, cy, 3, ccx, cy, doorW * 0.72);
+        grad.addColorStop(0, `rgba(0,229,255,${(0.45 + pulse * 0.25).toFixed(3)})`);
+        grad.addColorStop(0.6, `rgba(122,60,255,${(0.26 + pulse * 0.16).toFixed(3)})`);
+        grad.addColorStop(1, 'rgba(122,60,255,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x0, y0, doorW, doorH);
+        ctx.strokeStyle = destFree ? 'rgba(0,229,255,0.4)' : 'rgba(233,69,96,0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x0, y0, doorW, doorH);
+        for (let i = 0; i < 3; i++) {
+            const a = now / (340 + i * 90) + i * (Math.PI * 2 / 3) + (tip > 0 ? 0 : Math.PI);
+            const px = ccx + Math.cos(a) * 13;
+            const py = cy + Math.sin(a) * (doorH / 4);
+            ctx.globalAlpha = 0.85;
+            ctx.fillStyle = i % 2 === 0 ? '#00e5ff' : '#ffd700';
+            ctx.beginPath();
+            ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        const blink = 0.5 + 0.5 * Math.sin(now / 280);
+        ctx.globalAlpha = 0.35 + 0.65 * blink;
+        ctx.strokeStyle = '#eafcff';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 2; i++) {
+            const cx = tip === 1 ? x0 + doorW - 12 - i * 14 : x0 + 12 + i * 14;
+            ctx.beginPath();
+            ctx.moveTo(cx - 6 * tip, cy - 11);
+            ctx.lineTo(cx + 6 * tip, cy);
+            ctx.lineTo(cx - 6 * tip, cy + 11);
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+    }
+    // 垂直门区（上下边缘）：底光 + 描边 + 光点 + chevron（上门▼尖朝下 / 下门▲尖朝上）；destFree=false → 红色描边
+    _drawDoorV(ctx, x0, y0, doorW, doorH, now, tip, pulse, destFree = true) {
+        const cx = x0 + doorW / 2;
+        const ccy = y0 + doorH / 2;
+        const grad = ctx.createRadialGradient(cx, ccy, 3, cx, ccy, doorH * 0.72);
+        grad.addColorStop(0, `rgba(0,229,255,${(0.45 + pulse * 0.25).toFixed(3)})`);
+        grad.addColorStop(0.6, `rgba(122,60,255,${(0.26 + pulse * 0.16).toFixed(3)})`);
+        grad.addColorStop(1, 'rgba(122,60,255,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x0, y0, doorW, doorH);
+        ctx.strokeStyle = destFree ? 'rgba(0,229,255,0.4)' : 'rgba(233,69,96,0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x0, y0, doorW, doorH);
+        for (let i = 0; i < 3; i++) {
+            const a = now / (340 + i * 90) + i * (Math.PI * 2 / 3) + (tip > 0 ? 0 : Math.PI);
+            const px = cx + Math.cos(a) * (doorW / 4);
+            const py = ccy + Math.sin(a) * 13;
+            ctx.globalAlpha = 0.85;
+            ctx.fillStyle = i % 2 === 0 ? '#00e5ff' : '#ffd700';
+            ctx.beginPath();
+            ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        const blink = 0.5 + 0.5 * Math.sin(now / 280);
+        ctx.globalAlpha = 0.35 + 0.65 * blink;
+        ctx.strokeStyle = '#eafcff';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 2; i++) {
+            const cyy = tip === 1 ? y0 + doorH - 12 - i * 14 : y0 + 12 + i * 14;
+            ctx.beginPath();
+            ctx.moveTo(cx - 11, cyy - 6 * tip);
+            ctx.lineTo(cx, cyy + 6 * tip);
+            ctx.lineTo(cx + 11, cyy - 6 * tip);
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+    }
+    // 内部单向出口的格内标记：低透明度脉动漩涡圈
+    _drawPortalMark(ctx, cx, cy, now, pulse) {
+        ctx.save();
+        ctx.globalAlpha = 0.4 + pulse * 0.3;
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 10 + pulse * 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#00e5ff';
+        ctx.fill();
         ctx.restore();
     }
 }

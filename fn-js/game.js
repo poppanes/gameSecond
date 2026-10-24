@@ -5,6 +5,7 @@ const ROWS = 7;           // 7行
 const COLS = 8;           // 8列
 // 电玩像素字体（crt.js 会预热加载；离线/未加载完自动降级等宽字体）
 const ARCADE_FONT = '"Press Start 2P", "Courier New", monospace';
+const MENU_PER_PAGE = 16;             // 菜单分页：每页卡片数（4 列 × 4 行）
 
 const CELL_SIZE = 88;     // 每格大小（含边框）
 const BORDER_WIDTH = 6;   // 边框宽度
@@ -98,12 +99,14 @@ class Game {
         this._levelClearTimer = 0;        // 通关停留计时(ms)
         this.testMode = false;            // 测试地图模式（沙盒：自由生成怪物/物件）
         this._testMapVisible = SHOW_TEST_MAP;   // 菜单测试地图卡片显隐（` 键可临时切换）
+        this._menuPage = 0;                   // 菜单分页（0 起；光标跨页自动翻页）
         this.fps = 0;                     // 当前帧率（SHOW_FPS 控制是否绘制）
         this._fpsFrames = 0;              // FPS 采样帧数
         this._fpsTimer = 0;               // FPS 采样累计时间(ms)
         this._testTool = null;            // 当前选中的测试工具（怪物类型 / 物件类型）
         this._testCanvasBound = false;    // canvas 鼠标点击事件是否已绑定
         this._toolToast = null;           // 工具切换弹窗反馈（画布中央大字，1.4s 淡出）
+        this._portalPlacing = null;       // 传送门放置状态（null=无；{col,row,enter}=入口已放待出口）
         
         // 奖励关卡状态
         this.bonusMode = false;
@@ -183,6 +186,7 @@ class Game {
         if (layout) {
             map.applyLayout(layout);
         }
+        map.setPortals(config.portals);            // 传送门门对（关卡可选配置；15 回合内不配置）
         
         // 初始化玩家（位置：第4列第4行）
         player = new Player(3, 3);
@@ -227,6 +231,7 @@ class Game {
         this.levelIndex = -1;          // 不占正常关卡索引
         this.mode = 'playing';
         this._testTool = null;         // 进入沙盒时清空工具
+        this._portalPlacing = null;    // 清空传送门放置状态
         this._resetRoundState();
         this._bindTestCanvas();        // 绑定鼠标点击（防重复）
         
@@ -254,6 +259,20 @@ class Game {
         if (this._testCanvasBound) return;
         this._testCanvasBound = true;
         this.canvas.addEventListener('click', (e) => this._onTestCanvasClick(e));
+        this.canvas.addEventListener('mousemove', (e) => this._onTestCanvasMove(e));
+    }
+
+    // 鼠标移动 → 悬停格跟踪（测试地图坐标显示）
+    _onTestCanvasMove(e) {
+        if (!this.testMode) { this._hoverCell = null; return; }
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = CANVAS_WIDTH / rect.width;
+        const scaleY = CANVAS_HEIGHT / rect.height;
+        const mx = (e.clientX - rect.left) * scaleX;
+        const my = (e.clientY - rect.top) * scaleY;
+        const col = Math.floor((mx - OFFSET_X) / CELL_SIZE);
+        const row = Math.floor((my - OFFSET_Y) / CELL_SIZE);
+        this._hoverCell = (col >= 0 && col < COLS && row >= 0 && row < ROWS) ? { col, row } : null;
     }
     
     // 鼠标点击 → 网格坐标 → 应用当前工具
@@ -353,7 +372,7 @@ class Game {
             case 'KeyR': this._testTool = 'wall';      break;
             case 'KeyT': this._testTool = 'hole';      break;
             case 'KeyC': {
-                // 一键清除全部物件：石头/箱子/墙/黑洞
+                // 一键清除全部物件：石头/箱子/墙/黑洞 + 全部传送门
                 if (map) {
                     for (let r = 0; r < ROWS; r++) {
                         for (let c = 0; c < COLS; c++) {
@@ -374,8 +393,11 @@ class Game {
                         });
                         blackHoles.length = 0;
                     }
+                    // 传送门全部清空 + 放置状态重置
+                    map.setPortals([]);
+                    this._portalPlacing = null;
                 }
-                console.log('[test] 一键清除全部物件（石头/箱子/墙/黑洞）');
+                console.log('[test] 一键清除全部物件（石头/箱子/墙/黑洞/传送门）');
                 break;
             }
             case 'KeyF': {
@@ -402,6 +424,30 @@ class Game {
                 break;
             }
             case 'KeyI': this._cycleTestItem();        break;
+            case 'KeyP': {
+                // 传送门放置循环：入口 → 出口（配对生效）→ 入口 → 出口……多对共存；取消用 C 键
+                if (!player || !map) break;
+                const pc = player.gridX, pr = player.gridY;
+                const edge = map._portalEdge({ col: pc, row: pr });
+                if (!edge) { console.log('[test] 站到边缘格子（左右列/上下行）再按 P 放置传送门'); break; }
+                if (this._portalPlacing) {
+                    // 放出口：与待配对入口组成门对（第 N 对生效），下一轮继续放新入口
+                    const pair = map._normalizePair({
+                        a: { col: this._portalPlacing.col, row: this._portalPlacing.row, enter: this._portalPlacing.enter },
+                        b: { col: pc, row: pr }
+                    });
+                    if (pair) { pair[0].peer = pair[1]; pair[1].peer = pair[0]; map.portals.push(...pair); }
+                    console.log(`[test] 出口已放置 (${pc},${pr}) → 第${Math.floor(map.portals.length / 2)}对传送门生效（C键清除全部）`);
+                    this._portalPlacing = null;
+                } else {
+                    // 放入口（当前边缘格，触发方向 = 该边缘朝外）
+                    const enter = edge === 'left' ? [-1, 0] : edge === 'right' ? [1, 0]
+                        : edge === 'top' ? [0, -1] : [0, 1];
+                    this._portalPlacing = { col: pc, row: pr, enter };
+                    console.log(`[test] 入口已放置 (${pc},${pr})——走到目标边缘再按 P 放置出口`);
+                }
+                break;
+            }
             case 'Escape': case 'Backspace':
                 this._backToMenu();
                 break;
@@ -658,6 +704,7 @@ class Game {
             map.draw(false);                    // 地板+石头+墙（不含箱子）
             map.drawStampLayer();   // 猪头印平滑层：地板之上、实体之下（与 demo 两段渲染同口径）
             map.drawBoxesSplit(pBottom, false); // 箱子远景层：格底在玩家之上（被玩家遮挡）
+            map.drawPortals(performance.now());        // 传送门（地图外门区：能量底光+光点+chevron）
         }
         
         // 奖励关卡模式
@@ -705,8 +752,9 @@ class Game {
         // 街机 HUD 信息栏（生命 ♥ / TIME / SCORE；测试地图中部留给测试标签）
         this.drawHud(this.testMode);
         if (this.testMode) {
-            this.drawTestLabel();     // 测试模式 + 当前工具标签（原设计漏接的调用，修复不显示）
-            this.drawTestHelp();
+            this.drawTestLabel();     // 测试模式 + 当前工具 + 玩家 POS
+            this._drawTestHover();    // 悬停格高亮 + 坐标标签
+            this.drawTestHelp();      // 含待配对入口标记（传送门三态放置可视化）
             this._drawToolToast();    // 工具切换弹窗（最上层）
         }
         
@@ -1026,6 +1074,40 @@ class Game {
         ctx.lineWidth = 3;
         ctx.strokeText('工具: ' + toolName + '（点击格子放置）', x, y + 38);
         ctx.fillText('工具: ' + toolName + '（点击格子放置）', x, y + 38);
+
+        // 玩家坐标（传送门/放置测试对照）
+        if (player) {
+            ctx.font = 'bold 18px Arial';
+            ctx.fillStyle = '#7fd7ff';
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+            ctx.lineWidth = 3;
+            const posLabel = `POS: ${player.gridX},${player.gridY}`;
+            ctx.strokeText(posLabel, x, y + 68);
+            ctx.fillText(posLabel, x, y + 68);
+        }
+        ctx.restore();
+    }
+
+    // 悬停格高亮 + 坐标标签（测试地图鼠标位置可视化）
+    _drawTestHover() {
+        if (!this._hoverCell) return;
+        const ctx = this.ctx;
+        const { col, row } = this._hoverCell;
+        const x = OFFSET_X + col * CELL_SIZE;
+        const y = OFFSET_Y + row * CELL_SIZE;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0,229,255,0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        const label = `${col},${row}`;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(label, x + 4, y + 16);
+        ctx.fillStyle = 'rgba(0,229,255,0.95)';
+        ctx.fillText(label, x + 4, y + 16);
         ctx.restore();
     }
     
@@ -1066,10 +1148,30 @@ class Game {
         // 第四行：其他
         y += 26;
         ctx.fillStyle = '#d9b98a';
-        const line4 = '[Esc/Backspace]返回菜单  [空格]重开沙盒  [方向键/WASD]移动';
+        const line4 = '[Esc/Backspace]返回菜单  [空格]重开沙盒  [方向键/WASD]移动  [P]传送门(入口→出口→取消)';
         ctx.strokeText(line4, cx, y);
         ctx.fillText(line4, cx, y);
-        
+
+        // 传送门待配对入口标记：金色闪烁圈 + "入口"提示（三态放置的中间态可视化）
+        if (this._portalPlacing) {
+            const plx = OFFSET_X + this._portalPlacing.col * CELL_SIZE + CELL_SIZE / 2;
+            const ply = OFFSET_Y + this._portalPlacing.row * CELL_SIZE + CELL_SIZE / 2;
+            const plPulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+            ctx.save();
+            ctx.globalAlpha = 0.5 + plPulse * 0.4;
+            ctx.strokeStyle = '#ffd700';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(plx, ply, 14 + plPulse * 6, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.font = 'bold 12px Arial';
+            ctx.fillStyle = '#ffd700';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('入口', plx, ply - 26);
+            ctx.restore();
+        }
+
         ctx.restore();
     }
     
@@ -1527,7 +1629,7 @@ class Game {
         ctx.fillStyle = '#ffd700';
         ctx.fillText('HI-SCORE ' + this._hiScore, CANVAS_WIDTH / 2, 116);
         
-        // 卡片网格：4 列 × 3 行
+        // 卡片网格：4 列 × 4 行/页（分页；总卡 = LEVELS + 测试地图，光标跨页自动翻页）
         const cols = 4;
         const cardW = 210;
         const cardH = 110;
@@ -1536,18 +1638,28 @@ class Game {
         const startX = (CANVAS_WIDTH - (cols * cardW + (cols - 1) * gapX)) / 2;
         const startY = 130;
         
-        LEVELS.forEach((lvl, i) => {
-            if (!this._menuCardVisible(i)) return;   // 隐藏卡片不渲染、不参与布局
-            const c = i % cols;
-            const r = Math.floor(i / cols);
+        // 分页渲染：4 列 × 4 行/页（关卡 + 测试地图统一遍历，隐藏卡片跳过）
+        const total = LEVELS.length + 1;
+        const pages = Math.ceil(total / MENU_PER_PAGE);
+        this._menuPage = Math.min(this._menuPage, pages - 1);   // 页码越界保护
+        const pageStart = this._menuPage * MENU_PER_PAGE;
+        const pageEnd = Math.min(pageStart + MENU_PER_PAGE, total);
+        for (let i = pageStart; i < pageEnd; i++) {
+            if (!this._menuCardVisible(i)) continue;   // 隐藏卡片不渲染
+            const idx = i - pageStart;                 // 页内序号（网格位置）
+            const c = idx % cols;
+            const r = Math.floor(idx / cols);
             const x = startX + c * (cardW + gapX);
             const y = startY + r * (cardH + gapY);
-            const unlocked = i <= this.unlockedIndex;
+            const isTest = i === LEVELS.length;        // 测试地图卡片
+            const unlocked = isTest ? true : i <= this.unlockedIndex;
             const selected = i === this.menuCursor;
-            
-            // 卡片背景（电玩配色：暗紫底 + 霓虹选中）
-            ctx.fillStyle = unlocked ? (selected ? '#1e2c55' : '#141b36') : '#10101f';
-            ctx.strokeStyle = selected ? '#ffd700' : (unlocked ? '#2c3a68' : '#262640');
+
+            // 卡片背景（电玩配色：暗紫底 + 霓虹选中；测试地图紫色调）
+            ctx.fillStyle = isTest ? (selected ? '#2c1f4d' : '#1c1530')
+                : (unlocked ? (selected ? '#1e2c55' : '#141b36') : '#10101f');
+            ctx.strokeStyle = isTest ? (selected ? '#ffd700' : '#4a3a6e')
+                : (selected ? '#ffd700' : (unlocked ? '#2c3a68' : '#262640'));
             ctx.lineWidth = selected ? 4 : 2;
             ctx.fillRect(x, y, cardW, cardH);
             ctx.strokeRect(x, y, cardW, cardH);
@@ -1569,75 +1681,44 @@ class Game {
                 }
             }
 
-            // 关卡名（像素字水平垂直居中；BONUS 关金色；未解锁上移给锁图标让位）
-            ctx.font = `14px ${ARCADE_FONT}`;
-            ctx.fillStyle = !unlocked ? '#555' : (lvl.type === 'bonus' ? '#ffd700' : '#fff');
-            ctx.textAlign = 'center';
-            ctx.fillText(lvl.name, x + cardW / 2, unlocked ? y + cardH / 2 : y + cardH / 2 - 22);
+            if (isTest) {
+                // 测试地图卡片：标题 + 沙盒说明（两行以卡片中心对称）
+                ctx.font = 'bold 26px Arial';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.fillText('测试地图', x + cardW / 2, y + cardH / 2 - 14);
 
-            // 锁定标识：挂锁图标 + LOCKED（三行内容以卡片中心对称）
-            if (!unlocked) {
-                this._drawLockIcon(ctx, x + cardW / 2, y + cardH / 2 + 2, 13);
-                ctx.font = `9px ${ARCADE_FONT}`;
-                ctx.fillStyle = '#666';
-                ctx.fillText('LOCKED', x + cardW / 2, y + cardH / 2 + 26);
-            }
+                ctx.font = '15px Arial';
+                ctx.fillStyle = '#c9a6ff';
+                ctx.fillText('沙盒：自由生成', x + cardW / 2, y + cardH / 2 + 14);
+            } else {
+                const lvl = LEVELS[i];
+                // 关卡名（像素字水平垂直居中；BONUS 关金色；未解锁上移给锁图标让位）
+                ctx.font = `14px ${ARCADE_FONT}`;
+                ctx.fillStyle = !unlocked ? '#555' : (lvl.type === 'bonus' ? '#ffd700' : '#fff');
+                ctx.textAlign = 'center';
+                ctx.fillText(lvl.name, x + cardW / 2, unlocked ? y + cardH / 2 : y + cardH / 2 - 22);
 
-            // 锁定标识
-            if (!unlocked) {
-                ctx.font = `10px ${ARCADE_FONT}`;
-                ctx.fillStyle = '#666';
-                ctx.fillText('LOCKED', x + cardW / 2, y + cardH / 2 + 22);
-            }
-        });
-        
-        // 测试地图卡片（永远解锁，索引 = LEVELS.length；SHOW_TEST_MAP=false 隐藏，` 键临时呼出）
-        if (this._testMapVisible) {
-            const i = LEVELS.length;
-            const c = i % cols;
-            const r = Math.floor(i / cols);
-            const x = startX + c * (cardW + gapX);
-            const y = startY + r * (cardH + gapY);
-            const selected = i === this.menuCursor;
-            
-            ctx.fillStyle = selected ? '#2c1f4d' : '#1c1530';
-            ctx.strokeStyle = selected ? '#ffd700' : '#4a3a6e';
-            ctx.lineWidth = selected ? 4 : 2;
-            ctx.fillRect(x, y, cardW, cardH);
-            ctx.strokeRect(x, y, cardW, cardH);
-
-            // 选中效果（测试地图卡片同样式）
-            if (selected) {
-                ctx.save();
-                ctx.strokeStyle = '#00e5ff';
-                ctx.lineWidth = 2;
-                ctx.setLineDash([12, 8]);
-                ctx.lineDashOffset = -performance.now() / 30;
-                ctx.strokeRect(x - 5, y - 5, cardW + 10, cardH + 10);
-                ctx.setLineDash([]);
-                ctx.restore();
-                if (Math.sin(performance.now() / 180) > -0.3) {
-                    ctx.font = '16px Arial';
-                    ctx.fillStyle = '#ffd700';
-                    ctx.fillText('▶', x - 24, y + cardH / 2);
+                // 锁定标识：挂锁图标 + LOCKED（三行内容以卡片中心对称）
+                if (!unlocked) {
+                    this._drawLockIcon(ctx, x + cardW / 2, y + cardH / 2 + 2, 13);
+                    ctx.font = `9px ${ARCADE_FONT}`;
+                    ctx.fillStyle = '#666';
+                    ctx.fillText('LOCKED', x + cardW / 2, y + cardH / 2 + 26);
                 }
             }
-
-            ctx.font = 'bold 26px Arial';
-            ctx.fillStyle = '#fff';
-            ctx.textAlign = 'center';
-            ctx.fillText('测试地图', x + cardW / 2, y + cardH / 2 - 14);
-
-            ctx.font = '15px Arial';
-            ctx.fillStyle = '#c9a6ff';
-            ctx.fillText('沙盒：自由生成', x + cardW / 2, y + cardH / 2 + 14);
         }
         
-        // INSERT COIN（街机待机闪烁）
+        // INSERT COIN（街机待机闪烁）+ 页码（多页时显示）
         if (Math.sin(performance.now() / 300) > -0.2) {
             ctx.font = `12px ${ARCADE_FONT}`;
             ctx.fillStyle = '#ffd700';
-            ctx.fillText('INSERT COIN', CANVAS_WIDTH / 2, CANVAS_HEIGHT - 74);
+            ctx.fillText('INSERT COIN', CANVAS_WIDTH / 2 - 60, CANVAS_HEIGHT - 74);
+        }
+        if (pages > 1) {
+            ctx.font = `10px ${ARCADE_FONT}`;
+            ctx.fillStyle = '#8ea6ff';
+            ctx.fillText(`PAGE ${this._menuPage + 1}/${pages}`, CANVAS_WIDTH / 2 + 80, CANVAS_HEIGHT - 74);
         }
 
         // 底部提示
@@ -1675,7 +1756,7 @@ class Game {
         ctx.restore();
     }
 
-    // 菜单光标步进：自动跳过隐藏卡片（delta 为 ±1 / ±cols）
+    // 菜单光标步进：自动跳过隐藏卡片 + 光标跨页自动翻页（delta 为 ±1 / ±cols）
     _menuStep(delta) {
         const total = LEVELS.length + 1;
         let cur = this.menuCursor;
@@ -1684,6 +1765,7 @@ class Game {
             if (this._menuCardVisible(cur)) break;
         }
         this.menuCursor = cur;
+        this._menuPage = Math.floor(this.menuCursor / MENU_PER_PAGE);   // 光标跨页自动翻页
     }
 
     // 菜单按键处理（导航自动跳过隐藏卡片）

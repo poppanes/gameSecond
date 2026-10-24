@@ -55,6 +55,27 @@ class Player {
         
         // 拾取硬直怪物
         this.carriedGhost = null;
+
+        // [出生点占用校验] 默认出生点被占（箱子/石头/墙/黑洞/怪物）→ 最近可用格
+        // （地图先于角色创建；测试地图放箱子在出生点/预设布局覆盖出生点等场景均自动落位）
+        if (typeof map !== 'undefined' && map) {
+            const blocked = (typeof isBlackHole === 'function' && isBlackHole(gridX, gridY)) ||
+                map.hasBox(gridX, gridY) || !map.canMoveTo(gridX, gridY) ||
+                (typeof _isCellBlocked === 'function' && _isCellBlocked(gridX, gridY, this));
+            if (blocked) {
+                const alt = this._findNearestFreeCell(gridX, gridY);
+                if (alt) {
+                    this.gridX = alt.col;
+                    this.gridY = alt.row;
+                    const acx = OFFSET_X + alt.col * CELL_SIZE + CELL_SIZE / 2;
+                    const acy = OFFSET_Y + alt.row * CELL_SIZE + CELL_SIZE / 2;
+                    this.pixelX = acx - this.width / 2;
+                    this.pixelY = acy - this.height / 2;
+                    this.targetPixelX = this.pixelX;
+                    this.targetPixelY = this.pixelY;
+                }
+            }
+        }
     }
     
     // 受到伤害（死亡一次扣除一次数值），无敌中免疫伤害
@@ -282,6 +303,24 @@ class Player {
             this._commitMove(newX, newY);
             return true;
         }
+        // 传送门：站端点格 + 移动方向匹配端点 enter → 瞬移到对端（面向 = 出口朝向）
+        // 对端被占（箱子/石头/墙/黑洞/怪物）→ 传送门失效，不传送（原地不动，普通移动逻辑处理）
+        if (map) {
+            const dest = map.findPortal(this.gridX, this.gridY, dx, dy);
+            if (dest && map.isPortalDestFree(dest.col, dest.row, this)) {
+                this.gridX = dest.col;
+                this.gridY = dest.row;
+                const pcx = OFFSET_X + this.gridX * CELL_SIZE + CELL_SIZE / 2;
+                const pcy = OFFSET_Y + this.gridY * CELL_SIZE + CELL_SIZE / 2;
+                this.pixelX = pcx - this.width / 2;
+                this.pixelY = pcy - this.height / 2;
+                this.targetPixelX = this.pixelX;
+                this.targetPixelY = this.pixelY;
+                this.lastMoveDir = { dx: dest.face[0], dy: dest.face[1] };   // 出口朝向
+                console.log(`[Portal] 玩家传送至 (${this.gridX},${this.gridY})`);
+                return true;
+            }
+        }
         return false;
     }
     
@@ -298,6 +337,37 @@ class Player {
         return false;
     }
     
+    // [出生点占用] 最近可用格搜索：以 (cx,cy) 为中心的曼哈顿距离环扩展（d=1,2,3...）
+    // 可用 = 可通行 + 无箱子/石头/墙 + 无黑洞 + 无怪物（含预警态）；同环内取行列扫描序第一个（稳定）
+    _findNearestFreeCell(cx, cy) {
+        if (!map) return null;
+        for (let d = 1; d < COLS + ROWS; d++) {
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    if (Math.abs(c - cx) + Math.abs(r - cy) !== d) continue;
+                    if (map.hasBox(c, r) || !map.canMoveTo(c, r)) continue;
+                    if (typeof isBlackHole === 'function' && isBlackHole(c, r)) continue;
+                    if (typeof _isCellBlocked === 'function' && _isCellBlocked(c, r, this)) continue;
+                    return { col: c, row: r };
+                }
+            }
+        }
+        return null;
+    }
+
+    // 实际出生落位：默认点 (cx,cy) 被占（黑洞/箱子/石头/墙/怪物）→ 最近可用格；未被占 → 原点
+    _spawnPosition(cx = 3, cy = 3) {
+        if (!map) return { col: cx, row: cy };
+        const blocked = (typeof isBlackHole === 'function' && isBlackHole(cx, cy)) ||
+            map.hasBox(cx, cy) || !map.canMoveTo(cx, cy) ||
+            (typeof _isCellBlocked === 'function' && _isCellBlocked(cx, cy, this));
+        if (blocked) {
+            const alt = this._findNearestFreeCell(cx, cy);
+            if (alt) return alt;
+        }
+        return { col: cx, row: cy };
+    }
+
     // 重生：瞬移到起点 + 无敌闪烁
     respawn() {
         this.dying = false;                      // 保险：任何路径重生都清死亡状态、解锁移动
@@ -323,24 +393,12 @@ class Player {
             console.log(`[Player] 受伤，手中怪物飞出 (${g.flyDx},${g.flyDy})`);
         }
         
-        // 默认重生点 (3,3)；若该格被黑洞占据（Owl 打洞）→ 改落到最近的非黑洞可通行格
-        let sx = 3, sy = 3;
-        if (typeof isBlackHole === 'function' && isBlackHole(3, 3)) {
-            let best = null, bestD = Infinity;
-            for (let r = 0; r < ROWS; r++) {
-                for (let c = 0; c < COLS; c++) {
-                    if (!map || !map.canMoveTo(c, r) || map.hasBox(c, r)) continue;
-                    if (typeof _isCellBlocked === 'function' && _isCellBlocked(c, r)) continue;
-                    const d = Math.abs(c - 3) + Math.abs(r - 3);
-                    if (d < bestD) { bestD = d; best = [c, r]; }
-                }
-            }
-            if (best) { sx = best[0]; sy = best[1]; }
-        }
-        this.gridX = sx;
-        this.gridY = sy;
-        const cx = OFFSET_X + sx * CELL_SIZE + CELL_SIZE / 2;
-        const cy = OFFSET_Y + sy * CELL_SIZE + CELL_SIZE / 2;
+        // 实际落位：默认点 (3,3) 被占（黑洞/箱子/石头/墙/怪物）→ 最近可用格
+        const pos = this._spawnPosition();
+        this.gridX = pos.col;
+        this.gridY = pos.row;
+        const cx = OFFSET_X + pos.col * CELL_SIZE + CELL_SIZE / 2;
+        const cy = OFFSET_Y + pos.row * CELL_SIZE + CELL_SIZE / 2;
         this.pixelX = cx - this.width / 2;
         this.pixelY = cy - this.height / 2;
         this.targetPixelX = this.pixelX;
