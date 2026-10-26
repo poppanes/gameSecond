@@ -547,6 +547,7 @@ class Game {
                 this.timeLeft = Math.max(0, this.timeLeft - dt);
                 if (this.timeLeft <= 0) {
                     this.gameOver = true;
+        if (typeof Sfx !== 'undefined') Sfx.play('gameover');   // [C] 失败音效
                     gameInput.enabled = false;
                 }
             }
@@ -582,6 +583,7 @@ class Game {
                 clearAllFlips();
                 gameInput.enabled = false;
                 this._lastRoundScore = this.score - this._roundScoreBase;   // 本关得分（广告双倍用）
+                if (typeof Sfx !== 'undefined') Sfx.play('clear');   // [C] 通关音效
                 this._levelClearTimer = 3000;  // 3秒后进入下一关
                 this._unlockNext();            // 通关 → 解锁下一关
                 console.log('[Game] 通关！3秒后进入下一关');
@@ -1398,6 +1400,7 @@ class Game {
             t.color = '#e94560';
             t.borderColor = '#8b0000';
             addFlipAnimation(col, row, map.cellColor, map.borderColor, '#e94560', '#8b0000');   // 翻转动画（与普通关一致）
+            if (typeof Sfx !== 'undefined') Sfx.play('explode');   // [C] 爆炸音效
             if (typeof spawnFloatText === 'function') spawnFloatText(col, row, '炸弹!', '#ff4444');   // 即时反馈：浮动文字
             console.log(`[Bonus] 💣 翻到炸弹 (${col},${row}) → 结束`);
             this._endBonusRound(true);
@@ -1415,6 +1418,7 @@ class Game {
             const t = map.tiles[row][col];
             t.flipped = true;
             addFlipAnimation(col, row, map.cellColor, map.borderColor, map.cellColor, map.borderColor);   // 白→白翻板动作（图标其上常驻）
+            if (typeof Sfx !== 'undefined') Sfx.play('pickup');   // [C] 水果收集音效
             console.log(`[Bonus] 🍎 翻到 ${info.name} +${info.score} (${col},${row})`);
 
             // 所有水果翻完 → 进入结算
@@ -1430,6 +1434,7 @@ class Game {
             t.color = map.flippedColor;
             t.borderColor = map.flippedBorderColor;
             addFlipAnimation(col, row, map.cellColor, map.borderColor, map.flippedColor, map.flippedBorderColor);   // 翻转动画（修复"按 J 像没反应"）
+            if (typeof Sfx !== 'undefined') Sfx.play('flip');   // [C] 翻牌音效
             console.log(`[Bonus][LOG] (${col},${row}) 普通格 → 灰`);
         } else {
             console.log(`[Bonus][LOG] (${col},${row}) 已翻开，本次忽略`);
@@ -1444,6 +1449,7 @@ class Game {
         this._bonusEndReason = fromBomb ? 'bomb'
             : (this.bonusFruits.every(f => f.flipped) ? 'clear' : 'timeout');
         this.bonusPhase = 'settlement';
+        if (this._bonusEndReason === 'timeout' && typeof Sfx !== 'undefined') Sfx.play('timeout');   // [C] 超时音效
         this._settleAnimStart = performance.now();   // 结算滚动动画起点
         this.bonusPhaseTimer = BONUS_SETTLE_DURATION;
         gameInput.enabled = false;
@@ -1766,6 +1772,7 @@ class Game {
         }
         this.menuCursor = cur;
         this._menuPage = Math.floor(this.menuCursor / MENU_PER_PAGE);   // 光标跨页自动翻页
+        if (typeof Sfx !== 'undefined') Sfx.play('menu');   // [C] 菜单光标音效
     }
 
     // 菜单按键处理（导航自动跳过隐藏卡片）
@@ -1791,6 +1798,7 @@ class Game {
                 console.log(`[Menu] 测试地图入口 ${this._testMapVisible ? '已呼出' : '已隐藏'}`);
                 break;
             case 'Enter': case 'Space': case 'KeyJ':
+                if (typeof Sfx !== 'undefined') Sfx.play('confirm');   // [C] 确认音效
                 if (this.menuCursor === LEVELS.length && this._testMapVisible) {
                     console.log('[Menu] 选择测试地图');
                     this._startTestMap();

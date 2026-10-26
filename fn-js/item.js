@@ -120,6 +120,7 @@ class Item {
     
     // 拾取效果
     onPickup() {
+        if (typeof Sfx !== 'undefined') Sfx.play('pickup');   // [C] 拾取音效
         const info = ITEM_TYPES[this.type];
         switch (info.category) {
             case 'fruit':

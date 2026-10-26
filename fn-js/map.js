@@ -456,6 +456,7 @@ class Map {
     flipLine(col, row) {
         // 1. 先扫描4个方向，记录每个方向最近边界格子的位置
         const playerFlipped = this.tiles[row][col].color !== this.cellColor;
+        if (typeof Sfx !== 'undefined') Sfx.play(playerFlipped ? 'flipBack' : 'flip');   // [C] 翻转音效
         const targets = [];
         const isBoundary = (c, r) => playerFlipped
             ? this.tiles[r][c].color === this.cellColor       // 反转模式：白格是边界

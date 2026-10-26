@@ -69,6 +69,7 @@ function updatePendingFlips(dt) {
                         (enemies[j].warning || 0) <= 0 &&
                         enemies[j].gridX === pf.col && enemies[j].gridY === pf.row) {
                         enemies[j].stunned = ENEMY_STUN_DURATION;
+                        if (typeof Sfx !== 'undefined') Sfx.play('stun');   // [C] 击晕音效
                         console.log(`[flip] 玩家翻转击晕怪物(${pf.col},${pf.row}) ${ENEMY_STUN_DURATION/1000}秒后恢复`);
                     }
                 }

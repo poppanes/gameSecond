@@ -87,6 +87,7 @@ class Player {
         // 电玩特效：受伤飘字 + 屏幕抖动
         if (typeof spawnFloatText === 'function') spawnFloatText(this.gridX, this.gridY, '-1', '#ff4444');
         if (typeof crtShake === 'function') crtShake();
+        if (typeof Sfx !== 'undefined') Sfx.play('hurt');   // [C] 受伤音效
         this._startDeath(this.lives <= 0);         // 每次死亡都播死亡动画（1.5s 后重生 / 命尽则 game over）
         return this.lives;
     }
@@ -318,6 +319,7 @@ class Player {
                 this.targetPixelY = this.pixelY;
                 this.lastMoveDir = { dx: dest.face[0], dy: dest.face[1] };   // 出口朝向
                 console.log(`[Portal] 玩家传送至 (${this.gridX},${this.gridY})`);
+                if (typeof Sfx !== 'undefined') Sfx.play('portal');   // [C] 传送音效
                 return true;
             }
         }
