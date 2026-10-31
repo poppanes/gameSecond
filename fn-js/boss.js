@@ -40,6 +40,7 @@ class BossKing {
         this.flipTimer = BOSS_CONFIG.flipInterval;
         this.spawnTimer = BOSS_CONFIG.spawnInterval;
         this.spawnAnim = 0;                    // 释放动作动画剩余
+        this.deathAnim = 0;                    // 死亡动画时钟（dying 播放，播完 dead）
         this._lockedCell = null;               // 释放格锁定（spawnTimer 触发时锁定 BOSS 所在格）
         this.animClock = 0;                    // 飞行帧时钟
         this.state = 'active';                 // active/hurt/spawn/dying/dead
@@ -69,6 +70,13 @@ class BossKing {
 
     update(dt) {
         this.animClock += dt;
+        // 死亡演出：death 素材帧序播放（10 帧 1.2s），播完 → dead 通知胜利
+        if (this.state === 'dying') {
+            this.deathAnim += dt;
+            if (this.deathAnim >= 1200) this.state = 'dead';
+            return;
+        }
+        if (this.state === 'dead') return;
         // 受击：闪烁 + 停止移动 1.5s
         if (this.state === 'hurt') {
             this.hurtTimer -= dt;
@@ -211,7 +219,12 @@ class BossKing {
         const sheet = this.sheets[sheetKey];
         if (!sheet) return;
         const frames = sheet.frames;
-        const frame = frames[Math.floor(this.animClock / 120) % frames.length];
+        let frame;
+        if (this.state === 'dying' || this.state === 'dead') {
+            frame = frames[Math.min(frames.length - 1, Math.floor((this.deathAnim || 9999) / 120))];   // 死亡帧序播放，播完停最后帧
+        } else {
+            frame = frames[Math.floor(this.animClock / 120) % frames.length];
+        }
         const w = frame.w * BOSS_CONFIG.scale, h = frame.h * BOSS_CONFIG.scale;
         ctx.drawImage(sheet.img, frame.x, frame.y, frame.w, frame.h, this.px, this.py, w, h);
         // 受击闪烁（白色半透明罩闪烁）

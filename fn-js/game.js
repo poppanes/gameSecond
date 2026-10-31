@@ -1323,26 +1323,50 @@ class Game {
         console.log('[Boss] BOSS 战开始：击败幽灵王（血量 100，限时 500 秒）');
     }
 
+    // [PVP 预留] 二期对战模式接口：BOSS 战结束结果在此暴露，PVP 模式可替换/扩展结算流程
+    onBossRoundEnd(victory) {
+        // victory=true：玩家击败幽灵王（全部通关）；false：超时失败
+        // 二期 PVP：此处可上报战绩、广播对战结果、切换 PVP 对战流程
+        console.log('[Boss] BOSS 战结束 victory=' + victory + '（PVP 接口预留：二期对战模式可在此扩展）');
+    }
+
     _updateBossRound(dt) {
         updateAnimations(dt);
         updatePendingFlips(dt);
+        // 全通关胜利：感谢面板 + 倒计时自动回菜单
+        if (this._bossVictory) {
+            this._bossVictoryTimer -= dt;
+            if (this._bossVictoryTimer <= 0) {
+                this.bossMode = false;
+                this.mode = 'menu';
+                this.menuCursor = 0;
+            }
+            return;
+        }
         this.timeLeft -= dt;
         if (this.timeLeft <= 0 && !this.gameOver) {
-            // 超时 → 失败（v1：走 game over 面板，Space 重开本关；B4 做专属结算）
             this.gameOver = true;
             gameInput.enabled = false;
+            this.onBossRoundEnd(false);   // [PVP 预留] 超时失败结果
             return;
         }
         if (bossKing) {
             bossKing.update(dt);
-            if (bossKing.hp <= 0 && bossKing.state !== 'dying') {
-                bossKing.state = 'dying';   // 死亡演出（B4 细化）
+            if (bossKing.hp <= 0 && bossKing.state !== 'dying' && bossKing.state !== 'dead') {
+                bossKing.state = 'dying';   // 死亡演出（death 素材 1.2s 帧序）
+                if (typeof Sfx !== 'undefined') Sfx.play('gameover');
                 console.log('[Boss] 幽灵王被击败！');
+            }
+            if (bossKing.state === 'dead' && !this._bossVictory) {
+                this._bossVictory = true;   // 全通关胜利
+                this._bossVictoryTimer = 6000;   // 感谢面板 6 秒
+                gameInput.enabled = false;
+                if (typeof Sfx !== 'undefined') Sfx.play('clear');
+                this.onBossRoundEnd(true);   // [PVP 预留] 胜利结果
             }
         }
         if (player) player.update(dt);
     }
-
     _renderBossRound() {
         if (map) map.draw(false);
         drawFlipAnimations();
@@ -1350,6 +1374,30 @@ class Game {
         if (bossKing) { bossKing.draw(this.ctx); bossKing.drawHpBar(this.ctx); }
         this.drawTimer();
         this.drawHud(true);
+        // 感谢结算面板（击败幽灵王 = 全部通关）
+        if (this._bossVictory) {
+            const ctx = this.ctx;
+            ctx.fillStyle = 'rgba(0,0,0,0.78)';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 46px Arial';
+            ctx.fillStyle = '#ffd700';
+            ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.lineWidth = 6;
+            ctx.strokeText('THANK YOU!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 90);
+            ctx.fillText('THANK YOU!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 90);
+            ctx.font = 'bold 36px Arial';
+            ctx.fillStyle = '#fff';
+            ctx.strokeText('感谢游戏体验', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 20);
+            ctx.fillText('感谢游戏体验', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 20);
+            ctx.font = 'bold 24px Arial';
+            ctx.fillStyle = '#7fd7ff';
+            ctx.fillText('全部通关 · 幽灵王已被击败', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 34);
+            ctx.font = '20px Arial';
+            ctx.fillStyle = '#c9a6ff';
+            ctx.fillText('二期 · PVP 对战模式 · 敬请期待', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 90);
+        }
     }
 
     _startBonusRound() {
