@@ -137,6 +137,7 @@ class Enemy {
         this.targetPixelY = this.pixelY;
         this.isMoving = false;
         this.stunned = Math.max(this.stunned, 2000);   // 落地硬直至少 2s（拾取期间计时冻结，此处保底）
+        if (typeof Sfx !== 'undefined') Sfx.play('land');   // [C] 落地音效
         console.log(`[enemy] ${this.name} 投掷落地，保持硬直 (${cx},${cy})`);
     }
 
@@ -238,6 +239,21 @@ class Enemy {
             if (cx >= 0 && cx < COLS && cy >= 0 && cy < ROWS) {
                 this.gridX = cx;
                 this.gridY = cy;
+
+            // [BOSS] 投掷怪（玩家丢出，非撞飞反弹）命中 BOSS 包围盒 → 掉血 + 投掷怪击碎消失
+            if (this.flying && !this.bouncing && typeof bossKing !== 'undefined' && bossKing) {
+                const bw = CELL_SIZE * 2 * BOSS_CONFIG.scale;
+                const bh = CELL_SIZE * 2.4 * BOSS_CONFIG.scale;
+                const ccxx = this.pixelX + this.size / 2, ccyy = this.pixelY + this.size / 2;
+                if (ccxx > bossKing.px && ccxx < bossKing.px + bw && ccyy > bossKing.py && ccyy < bossKing.py + bh) {
+                    bossKing.takeDamage(BOSS_CONFIG.hitDamage);
+                    if (typeof Sfx !== 'undefined') Sfx.play('hitEnemy');
+                    if (typeof spawnFloatText !== 'undefined') spawnFloatText(cx, cy, '-' + BOSS_CONFIG.hitDamage, '#ff6b6b');
+                    this.alive = false;
+                    console.log('[Boss][LOG] 投掷小怪命中幽灵王 -' + BOSS_CONFIG.hitDamage + '（剩余 ' + bossKing.hp + '）');
+                    return;
+                }
+            }
             }
             
             // 飞出地图边缘 → 投掷怪落地保持硬直；被撞飞的反弹出界仍死亡
@@ -263,6 +279,7 @@ class Enemy {
                 const hitEnemies = enemies.filter(e => e !== this && e.alive && !e.carried && 
                     e.gridX === cx && e.gridY === cy);
                 if (hitEnemies.length > 0) {
+                    if (typeof Sfx !== 'undefined') Sfx.play('hitEnemy');   // [C] 撞怪音效
                     hitEnemies.forEach(hitEnemy => {
                         console.log(`[enemy] ${this.name} 飞行撞到 ${hitEnemy.name}(${cx},${cy}) → 撞飞`);
                         // 被撞怪物：斜上飞出 + 高速撞飞效果（bouncing=true → 反弹出界走"死亡+复活"，不视为投掷消灭）

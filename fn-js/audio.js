@@ -25,6 +25,9 @@ const SFX_DEFS = {
     hurt:     { type: 'sawtooth', freq: 300,  endFreq: 80,   dur: 0.2,  vol: 0.6 },  // 受伤：锯齿骤降
     death:    { type: 'sawtooth', freq: 400,  endFreq: 40,   dur: 0.6,  vol: 0.7 },  // 死亡：长下降
     explode:  { type: 'noise',    dur: 0.3,   vol: 0.7 },                             // 爆炸：白噪声
+    bossFlip: { type: 'sawtooth', freq: 100,  endFreq: 40,  dur: 0.4,  vol: 0.7 },   // BOSS 翻转：低沉轰鸣
+    hitEnemy: { type: 'square',   freq: 180,  endFreq: 70,  dur: 0.12, vol: 0.55 },  // 投掷撞怪：撞击
+    land:     { type: 'triangle', freq: 130,  endFreq: 55,  dur: 0.14, vol: 0.55 },  // 投掷落地：闷响
     portal:   { type: 'triangle', freq: 200,  endFreq: 1200, dur: 0.18, vol: 0.5 },  // 传送：科幻上滑
     menu:     { type: 'square',   freq: 880,  endFreq: 880,  dur: 0.05, vol: 0.4 },  // 菜单光标：短哔
     confirm:  { type: 'square',   freq: 660,  endFreq: 990,  dur: 0.1,  vol: 0.5 },  // 确认：上扬双音感
@@ -76,6 +79,24 @@ const Sfx = {
         osc.connect(g).connect(ctx.destination);
         osc.start(t0);
         osc.stop(t0 + dur);
+    },
+
+    // 涟漪逐格音：基频随距离上/下行（正翻上行/反转下行），音量随距离衰减——水波听感
+    playRipple(dist, reversed = false) {
+        const ctx = this._ctx();
+        if (!ctx) return;
+        const base = reversed ? 660 : 440;
+        const freq = Math.max(80, base + dist * (reversed ? -45 : 55));
+        const vol = Math.max(0.12, 0.45 - dist * 0.04);
+        try { this._tone(ctx, 'square', freq, freq * 1.3, 0.07, vol, ctx.currentTime); } catch (e) { }
+    },
+
+    // 怪物翻板音：低沉下行（与玩家明亮涟漪区分敌我音色）
+    playEnemyFlip(dist = 0) {
+        const ctx = this._ctx();
+        if (!ctx) return;
+        const freq = Math.max(80, 180 - dist * 30);
+        try { this._tone(ctx, 'square', freq, freq * 0.7, 0.1, 0.35, ctx.currentTime); } catch (e) { }
     },
 
     // 白噪声（爆炸）：随机采样 Buffer + 衰减包络

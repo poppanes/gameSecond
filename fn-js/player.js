@@ -80,6 +80,7 @@ class Player {
     
     // 受到伤害（死亡一次扣除一次数值），无敌中免疫伤害
     takeDamage(amount = 1) {
+        if (this.godMode) return this.lives;       // 测试无敌（Digit7 toggle）——一切伤害免疫
         if (this.invTimer > 0) return this.lives;  // 无敌中免疫（不刷新计时器）
         if (this.dying) return this.lives;         // 死亡动画期间不再重复扣血
         this.lives = Math.max(0, this.lives - amount);

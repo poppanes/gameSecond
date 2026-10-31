@@ -145,6 +145,8 @@ class Game {
         
         if (config.type === 'bonus') {
             this._startBonusRound();
+        } else if (config.type === 'boss') {
+            this._startBossRound();
         } else {
             this._startNormalRound(config);
         }
@@ -160,6 +162,7 @@ class Game {
         if (typeof AdManager !== 'undefined') AdManager.hideBanner();   // 进游戏收起菜单横幅
         this._levelClearTimer = 0;
         this.bonusMode = false;
+        this.bossMode = false;
         this.bonusFruits = [];
         this.bonusBombs = new Set();
         if (this._bonusEndTimer) { clearTimeout(this._bonusEndTimer); this._bonusEndTimer = null; }
@@ -293,7 +296,7 @@ class Game {
     _applyTestTool(col, row) {
         const tool = this._testTool;
         if (!tool) {
-            console.log('[test] 未选择工具：先按 1-5(怪物)/Q/E/R/T(物件)/C(清物件)/G(清怪) 再点击');
+            console.log('[test] 未选择工具：先按 1-6(怪物/BOSS)/Q/E/R/T(物件)/C(清物件)/G(清怪) 再点击');
             return;
         }
         const key = `${col},${row}`;
@@ -367,6 +370,15 @@ class Game {
             case 'Digit3': this._testTool = 'Snowman'; break;
             case 'Digit4': this._testTool = 'Octopus'; break;
             case 'Digit5': this._testTool = 'Owl';     break;
+            case 'Digit7': {
+                if (player) { player.godMode = !player.godMode; console.log('[test] 无敌模式：' + (player.godMode ? '开启（一切伤害免疫）' : '关闭')); }
+                break;
+            }
+            case 'Digit6': {
+                if (typeof bossKing !== 'undefined' && bossKing) { bossKing = null; console.log('[test] BOSS 幽灵王已移除'); }
+                else { bossKing = new BossKing(); console.log('[test] BOSS 幽灵王已召唤（血量 100，飞行中）'); }
+                break;
+            }
             case 'KeyQ': this._testTool = 'stone';     break;
             case 'KeyE': this._testTool = 'box';       break;
             case 'KeyR': this._testTool = 'wall';      break;
@@ -396,6 +408,7 @@ class Game {
                     // 传送门全部清空 + 放置状态重置
                     map.setPortals([]);
                     this._portalPlacing = null;
+                    if (typeof bossKing !== 'undefined') bossKing = null;   // BOSS 一并清除
                 }
                 console.log('[test] 一键清除全部物件（石头/箱子/墙/黑洞/传送门）');
                 break;
@@ -420,7 +433,8 @@ class Game {
                     enemies.splice(i, 1);
                     n++;
                 }
-                console.log(`[test] 一键清除全部怪物 ×${n}`);
+                if (typeof bossKing !== 'undefined') bossKing = null;   // BOSS 一并清除
+        console.log(`[test] 一键清除全部怪物 ×${n}`);
                 break;
             }
             case 'KeyI': this._cycleTestItem();        break;
@@ -534,6 +548,12 @@ class Game {
             this._updateBonus(dt);
             return;
         }
+
+        // BOSS 关卡模式
+        if (this.bossMode) {
+            this._updateBossRound(dt);
+            return;
+        }
         
         // 工具切换弹窗衰减
         if (this._toolToast) {
@@ -560,6 +580,7 @@ class Game {
             if (typeof updateBursts === 'function') updateBursts(dt);
             // 更新所有敌人
             enemies.forEach(e => e.update(dt));
+        if (typeof bossKing !== 'undefined' && bossKing) bossKing.update(dt);   // [Boss] BOSS 更新（测试地图召唤）
             // 清理已死亡敌人 → 加入复活队列
             for (let i = enemies.length - 1; i >= 0; i--) {
                 if (!enemies[i].alive) killEnemy(enemies[i]);
@@ -714,6 +735,12 @@ class Game {
             this._renderBonus();
             return;
         }
+
+        // BOSS 关卡模式
+        if (this.bossMode) {
+            this._renderBossRound();
+            return;
+        }
         
         // 绘制翻转动画（覆盖在格子上层）
         drawFlipAnimations();
@@ -736,6 +763,7 @@ class Game {
         
         // 绘制所有敌人
         enemies.forEach(e => e.draw(this.ctx));
+        if (typeof bossKing !== 'undefined' && bossKing) { bossKing.draw(this.ctx); bossKing.drawHpBar(this.ctx); }   // [Boss] BOSS 绘制+血量条
         
         // 绘制玩家
         if (player) {
@@ -1077,8 +1105,16 @@ class Game {
         ctx.strokeText('工具: ' + toolName + '（点击格子放置）', x, y + 38);
         ctx.fillText('工具: ' + toolName + '（点击格子放置）', x, y + 38);
 
-        // 玩家坐标（传送门/放置测试对照）
+        // 玩家坐标 + 无敌状态（测试对照）
         if (player) {
+            if (player.godMode) {
+                ctx.font = 'bold 18px Arial';
+                ctx.fillStyle = '#ffd700';
+                ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+                ctx.lineWidth = 3;
+                ctx.strokeText('GOD MODE', x, y + 98);
+                ctx.fillText('GOD MODE', x, y + 98);
+            }
             ctx.font = 'bold 18px Arial';
             ctx.fillStyle = '#7fd7ff';
             ctx.strokeStyle = 'rgba(0,0,0,0.6)';
@@ -1129,7 +1165,7 @@ class Game {
         let y = mapBottom + 22;
         ctx.fillStyle = '#9fb3d9';
         ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-        const line1 = '怪物: [1]幽灵  [2]蜘蛛  [3]雪人  [4]章鱼  [5]猫头鹰';
+        const line1 = '怪物: [1]幽灵  [2]蜘蛛  [3]雪人  [4]章鱼  [5]猫头鹰  [6]BOSS幽灵王';
         ctx.strokeText(line1, cx, y);
         ctx.fillText(line1, cx, y);
         
@@ -1270,6 +1306,52 @@ class Game {
     }
     
     // 进入奖励关卡
+    // ============================================
+    // BOSS 关卡（全部关卡通关后进入；500 秒内击败幽灵王）
+    // ============================================
+    _startBossRound() {
+        this.bossMode = true;
+        map = new Map(this.ctx, { skipDecor: true });
+        map.initEmpty();
+        enemies.length = 0; blackHoles.length = 0;
+        if (typeof items !== 'undefined') items.length = 0;
+        player = new Player(3, 3);
+        gameInput.updatePlayer(player);
+        gameInput.enabled = true;
+        this.timeLeft = BOSS_CONFIG.roundTime;   // 500 秒
+        bossKing = new BossKing();
+        console.log('[Boss] BOSS 战开始：击败幽灵王（血量 100，限时 500 秒）');
+    }
+
+    _updateBossRound(dt) {
+        updateAnimations(dt);
+        updatePendingFlips(dt);
+        this.timeLeft -= dt;
+        if (this.timeLeft <= 0 && !this.gameOver) {
+            // 超时 → 失败（v1：走 game over 面板，Space 重开本关；B4 做专属结算）
+            this.gameOver = true;
+            gameInput.enabled = false;
+            return;
+        }
+        if (bossKing) {
+            bossKing.update(dt);
+            if (bossKing.hp <= 0 && bossKing.state !== 'dying') {
+                bossKing.state = 'dying';   // 死亡演出（B4 细化）
+                console.log('[Boss] 幽灵王被击败！');
+            }
+        }
+        if (player) player.update(dt);
+    }
+
+    _renderBossRound() {
+        if (map) map.draw(false);
+        drawFlipAnimations();
+        if (player) player.draw(this.ctx);
+        if (bossKing) { bossKing.draw(this.ctx); bossKing.drawHpBar(this.ctx); }
+        this.drawTimer();
+        this.drawHud(true);
+    }
+
     _startBonusRound() {
         console.log('[Bonus] 进入奖励关卡');
         this.bonusMode = true;
@@ -1701,7 +1783,7 @@ class Game {
                 const lvl = LEVELS[i];
                 // 关卡名（像素字水平垂直居中；BONUS 关金色；未解锁上移给锁图标让位）
                 ctx.font = `14px ${ARCADE_FONT}`;
-                ctx.fillStyle = !unlocked ? '#555' : (lvl.type === 'bonus' ? '#ffd700' : '#fff');
+                ctx.fillStyle = !unlocked ? '#555' : (lvl.type === 'boss' ? '#ff6b6b' : (lvl.type === 'bonus' ? '#ffd700' : '#fff'));
                 ctx.textAlign = 'center';
                 ctx.fillText(lvl.name, x + cardW / 2, unlocked ? y + cardH / 2 : y + cardH / 2 - 22);
 

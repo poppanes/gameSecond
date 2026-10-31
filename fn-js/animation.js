@@ -63,6 +63,7 @@ function updatePendingFlips(dt) {
             
             // 翻板执行时，仅玩家翻转 → 怪物进入硬直状态（不立即消失）
             // 重生闪烁预警中（warning>0）的怪物无敌，不可被击晕（与角色受伤无敌对齐）
+            let stunnedHere = false;
             if (pf.fromPlayer && typeof enemies !== 'undefined') {
                 for (let j = enemies.length - 1; j >= 0; j--) {
                     if (enemies[j] && enemies[j].alive === true && enemies[j].stunned <= 0 &&
@@ -70,11 +71,23 @@ function updatePendingFlips(dt) {
                         enemies[j].gridX === pf.col && enemies[j].gridY === pf.row) {
                         enemies[j].stunned = ENEMY_STUN_DURATION;
                         if (typeof Sfx !== 'undefined') Sfx.play('stun');   // [C] 击晕音效
+                        stunnedHere = true;
                         console.log(`[flip] 玩家翻转击晕怪物(${pf.col},${pf.row}) ${ENEMY_STUN_DURATION/1000}秒后恢复`);
                     }
                 }
             }
             
+            // 涟漪逐格音效（玩家翻转线）：距离递变（正翻上行/反转下行）——击晕格已播 stun 不叠加
+            // 怪物翻板：低沉单音（敌我音色区分）
+            if (typeof Sfx !== 'undefined') {
+                const rDist = Math.max(0, Math.round((pf.delay - FLIP_DELAY) / RIPPLE_STEP));
+                if (pf.fromPlayer) {
+                    const rRev = pf.newColor === map.cellColor;
+                    if (!stunnedHere) Sfx.playRipple(rDist, rRev);
+                } else {
+                    Sfx.playEnemyFlip(rDist);
+                }
+            }
             // 同时播放翻转动画
             addFlipAnimation(pf.col, pf.row, pf.oldColor, pf.oldBorderColor, pf.newColor, pf.newBorderColor);
             
