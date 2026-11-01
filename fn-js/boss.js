@@ -9,6 +9,7 @@ const BOSS_CONFIG = {
     hurtFlashMs: 1500,      // BOSS 受击闪烁时间
     hurtStopMs: 1500,       // BOSS 受击停止移动时间
     flipInterval: 20000,    // 翻转间隔 20s（B2 接入：两行/两列翻转）
+    flipWarnMs: 1000,       // 翻转预警时长（红色闪烁提示，给玩家躲避窗口）
     spawnInterval: 15000,   // 释放小怪间隔 15s（B2 接入：空中丢下）
     moveSpeed: 7,           // 移动速度（px/帧@60fps，可配置，用户调参）
     scale: 0.75,            // 绘制缩放（帧 270×304 → 约 202×228，用户调参）
@@ -32,12 +33,30 @@ function buildBossFrames(img, cols, rows) {
     return frames;
 }
 
+// death 素材（boss_death1.png 1280×720）精灵为非均匀排布（透视缩小：逐帧变小、间距递减），
+// 按等分网格裁剪会串帧（帧右缘被切、下一帧左缘带残影）。
+// 以下为逐帧实测包围盒导出的自定义帧窗口：统一 240×330，上排 y=0 / 下排 y=300，底部对齐，
+// 保证死亡缩小消失过程位置稳定、无残影无切边。
+const DEATH_FRAMES = [
+    { x: 40,   y: 0,   w: 240, h: 330 },   // 上排 1（精灵 x39-282）
+    { x: 324,  y: 0,   w: 240, h: 330 },   // 上排 2（332-557）
+    { x: 587,  y: 0,   w: 240, h: 330 },   // 上排 3（604-811）
+    { x: 831,  y: 0,   w: 240, h: 330 },   // 上排 4（859-1043）
+    { x: 1040, y: 0,   w: 240, h: 330 },   // 上排 5（1092-1246）
+    { x: 42,   y: 300, w: 240, h: 330 },   // 下排 1（86-239）
+    { x: 306,  y: 300, w: 240, h: 330 },   // 下排 2（358-495）
+    { x: 574,  y: 300, w: 240, h: 330 },   // 下排 3（634-754）
+    { x: 839,  y: 300, w: 240, h: 330 },   // 下排 4（911-1007）
+    { x: 1040, y: 300, w: 240, h: 330 },   // 下排 5（1128-1206 消散碎片）
+];
+
 class BossKing {
     constructor() {
         this.hp = BOSS_CONFIG.maxHp;
         this.maxHp = BOSS_CONFIG.maxHp;
         this.hurtTimer = 0;                    // 受击（闪烁+停止移动）剩余
         this.flipTimer = BOSS_CONFIG.flipInterval;
+        this.flipWarn = null;                  // 翻转预警 { cells, timer }——倒计时结束才真正翻转
         this.spawnTimer = BOSS_CONFIG.spawnInterval;
         this.spawnAnim = 0;                    // 释放动作动画剩余
         this.deathAnim = 0;                    // 死亡动画时钟（dying 播放，播完 dead）
@@ -63,20 +82,47 @@ class BossKing {
         defs.forEach(([key, src, cols, rows]) => {
             const img = new Image();
             this.sheets[key] = null;   // onload 前占位（draw 空判跳过）
-            img.onload = () => { this.sheets[key] = { img, frames: buildBossFrames(img, cols, rows) }; };
+            img.onload = () => {
+                // death 素材精灵非均匀排布 → 用实测自定义帧窗口；其余按网格等分
+                const frames = key === 'death' ? DEATH_FRAMES : buildBossFrames(img, cols, rows);
+                // 白色剪影版（受击频闪用：只染精灵本体轮廓，不出现方块罩）
+                const white = BossKing.makeWhiteSilhouette(img);
+                this.sheets[key] = { img, white, frames };
+            };
             img.src = src;
         });
+    }
+
+    // 离屏生成白色剪影：原 alpha 通道保留，颜色全部染白（用于受击闪烁）
+    static makeWhiteSilhouette(img) {
+        const cv = document.createElement('canvas');
+        cv.width = img.width; cv.height = img.height;
+        const c = cv.getContext('2d');
+        c.drawImage(img, 0, 0);
+        c.globalCompositeOperation = 'source-in';
+        c.fillStyle = '#fff';
+        c.fillRect(0, 0, cv.width, cv.height);
+        return cv;
     }
 
     update(dt) {
         this.animClock += dt;
         // 死亡演出：death 素材帧序播放（10 帧 1.2s），播完 → dead 通知胜利
         if (this.state === 'dying') {
+            this.flipWarn = null;   // 死亡时取消未兑现的翻转预警
             this.deathAnim += dt;
             if (this.deathAnim >= 1200) this.state = 'dead';
             return;
         }
-        if (this.state === 'dead') return;
+        if (this.state === 'dead') { this.flipWarn = null; return; }
+        // 翻转预警倒计时：任何活动状态（含受击/释放）都推进，确保预警必兑现
+        if (this.flipWarn) {
+            this.flipWarn.timer -= dt;
+            if (this.flipWarn.timer <= 0) {
+                this._executeFlip(this.flipWarn.cells);
+                this.flipWarn = null;
+            }
+        }
         // 受击：闪烁 + 停止移动 1.5s
         if (this.state === 'hurt') {
             this.hurtTimer -= dt;
@@ -137,7 +183,7 @@ class BossKing {
         }
     }
 
-    // B2：翻转两行或两列（白格→灰；玩家站在被翻的白格上受伤）
+    // B2+：翻转改为两段式——先选定两行/两列红色闪烁预警 1.5s，倒计时结束才真正执行翻转（给玩家躲避窗口）
     _doFlip() {
         if (!map) return;
         const cells = [];
@@ -152,6 +198,14 @@ class BossKing {
             while (r2 === r1) r2 = Math.floor(Math.random() * ROWS);
             for (let c = 0; c < COLS; c++) { cells.push([c, r1]); cells.push([c, r2]); }
         }
+        this.flipWarn = { cells, timer: BOSS_CONFIG.flipWarnMs };
+        if (typeof Sfx !== 'undefined') Sfx.play('bossFlip');   // 预警音效提前到预警开始时提示
+        console.log('[Boss][LOG] 翻转预警 ' + (BOSS_CONFIG.flipWarnMs / 1000) + 's（' + cells.length + ' 格，行列见执行日志）');
+    }
+
+    // 预警结束：真正执行翻转（白→灰；玩家站在被翻的白格上受伤）
+    _executeFlip(cells) {
+        if (!map) return;
         let hitPlayer = false;
         cells.forEach(([c, r]) => {
             const t = map.tiles[r] && map.tiles[r][c];
@@ -165,8 +219,7 @@ class BossKing {
             if (player && !player.dying && player.gridX === c && player.gridY === r) hitPlayer = true;
         });
         if (hitPlayer && player && !player.dying) player.takeDamage(1);
-        if (typeof Sfx !== 'undefined') Sfx.play('bossFlip');
-        console.log('[Boss][LOG] 幽灵王翻转（' + cells.length + ' 格，debugLog 开启可见行列）');
+        console.log('[Boss][LOG] 幽灵王翻转执行（' + cells.length + ' 格）');
     }
 
 
@@ -205,7 +258,8 @@ class BossKing {
             console.log('[Boss][LOG] 锁定格被占 → 邻近空格 (' + col + ',' + row + ')');
         }
         const m = new BossMinion(col, row);
-        m.alive = true; m.warning = 2000; m.stunned = 0; m.flying = false; m.carried = false;
+        // [优化] 移除落地无敌：生成即 active，可被玩家踩翻/击杀（原 2000ms 预警=无敌豁免）
+        m.alive = true; m.warning = 0; m.stunned = 0; m.flying = false; m.carried = false;
         m.pixelX = OFFSET_X + col * CELL_SIZE + BORDER_WIDTH;   // 生成在锁定格的格中心（居中）
         m.pixelY = OFFSET_Y + row * CELL_SIZE + BORDER_WIDTH;
         m.targetPixelX = m.pixelX; m.targetPixelY = m.pixelY;
@@ -215,30 +269,46 @@ class BossKing {
     }
 
     draw(ctx) {
-        const sheetKey = this.state === 'hurt' ? 'hurt' : (this.state === 'spawn' ? 'spawn' : 'fly');
+        // 翻转预警：即将翻转的行列格子红色闪烁（200ms 周期），提前 1.5s 提示玩家躲避
+        if (this.flipWarn) {
+            const blink = Math.floor(performance.now() / 200) % 2 === 0;
+            const alpha = blink ? 0.45 : 0.18;   // 常亮低透明 + 高亮闪烁交替，始终可见
+            ctx.save();
+            ctx.fillStyle = 'rgba(233, 69, 96, ' + alpha + ')';
+            this.flipWarn.cells.forEach(([c, r]) => {
+                ctx.fillRect(OFFSET_X + c * CELL_SIZE, OFFSET_Y + r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            });
+            ctx.restore();
+        }
+        // dying/dead → death 死亡帧表（此前误用 fly 帧表，导致死亡帧序列不播放）
+        const sheetKey = this.state === 'hurt' ? 'hurt'
+            : (this.state === 'spawn' ? 'spawn'
+            : (this.state === 'dying' || this.state === 'dead') ? 'death' : 'fly');
+        // 死亡动画播完（dead）→ 直接删除，不再绘制残留帧
+        if (this.state === 'dead') return;
         const sheet = this.sheets[sheetKey];
         if (!sheet) return;
         const frames = sheet.frames;
         let frame;
         if (this.state === 'dying' || this.state === 'dead') {
-            frame = frames[Math.min(frames.length - 1, Math.floor((this.deathAnim || 9999) / 120))];   // 死亡帧序播放，播完停最后帧
+            // 死亡帧序：10 帧每帧 120ms 共 1.2s，播完停最后帧（deathAnim=0 时从第 0 帧起播）
+            frame = frames[Math.min(frames.length - 1, Math.floor(this.deathAnim / 120))];
         } else {
             frame = frames[Math.floor(this.animClock / 120) % frames.length];
         }
         const w = frame.w * BOSS_CONFIG.scale, h = frame.h * BOSS_CONFIG.scale;
         ctx.drawImage(sheet.img, frame.x, frame.y, frame.w, frame.h, this.px, this.py, w, h);
-        // 受击闪烁（白色半透明罩闪烁）
-        if (this.state === 'hurt' && Math.floor(this.hurtTimer / 100) % 2 === 0) {
-            ctx.save();
-            ctx.globalAlpha = 0.5;
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(this.px, this.py, w, h);
-            ctx.restore();
+        // 受击闪烁：白色剪影叠加，只频闪 BOSS 本体（原 fillRect 方块罩因帧窗口大于精灵而显得是超大方块）
+        if (this.state === 'hurt' && sheet.white && Math.floor(this.hurtTimer / 100) % 2 === 0) {
+            ctx.globalAlpha = 0.85;
+            ctx.drawImage(sheet.white, frame.x, frame.y, frame.w, frame.h, this.px, this.py, w, h);
+            ctx.globalAlpha = 1;
         }
     }
 
     // 血量条（BOSS 战顶部）
     drawHpBar(ctx) {
+        if (this.state === 'dead') return;   // 死亡动画播完 → 血条一并移除
         const w = 300, h = 16;
         const x = (CANVAS_WIDTH - w) / 2, y = 60;
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -278,23 +348,134 @@ class BossMinion extends Ghost {
             img.src = src;
         });
     }
-    // 两格联动翻转：当前格 + 随机同列/同行邻格（灰→白，干扰玩家通关）
+    // B3 优化：BOSS 小怪行为重写
+    //  1) 玩家存活 → 优先追击玩家（击杀优先，不再优先翻板）
+    //  2) 玩家被击杀/不存在 → 才去翻转地板
+    //  3) 翻转 = 当前格 + 同列或同行连续相邻格（两格联动）
+    //  4) 落地无敌已在 _dropMinion 移除，生成即被击杀
+    update(dt) {
+        if (!this.alive || !player) return;
+        if (!isFinite(dt)) dt = 0;
+
+        // 复活预警中：倒计时，不可行动
+        if (this.warning > 0) { this.warning = Math.max(0, this.warning - dt); return; }
+
+        // 飞行中：移动交给基类
+        if (this.flying) { super.update(dt); return; }
+
+        // 被拾取中：跟随玩家
+        if (this.carried) {
+            this.gridX = player.gridX; this.gridY = player.gridY;
+            this.pixelX = player.pixelX; this.pixelY = player.pixelY;
+            return;
+        }
+
+        // 硬直中：暂停所有活动
+        if (this.stunned > 0) { this.stunned = Math.max(0, this.stunned - dt); return; }
+
+        // 被推期间禁用自主移动
+        if (this.pushed > 0) { this.pushed = Math.max(0, this.pushed - dt); return; }
+
+        if (this.moveCooldown > 0) this.moveCooldown = Math.max(0, this.moveCooldown - dt);
+
+        // 滑行中（复用基类逻辑，加速阶段更快）
+        if (this.isMoving) {
+            const dx = this.targetPixelX - this.pixelX;
+            const dy = this.targetPixelY - this.pixelY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 0.5) {
+                this.pixelX = this.targetPixelX; this.pixelY = this.targetPixelY;
+                this.isMoving = false; this._onArrive();
+            } else {
+                const spd = getBoostedSpeed(this.moveSpeed);
+                const step = Math.min(spd * dt, dist);
+                this.pixelX += (dx / dist) * step;
+                this.pixelY += (dy / dist) * step;
+            }
+            return;
+        }
+
+        if (this.moveCooldown > 0) return;
+
+        // 玩家是否仍可击杀（存活）
+        const playerAlive = player && (typeof player.isDead !== 'function' || !player.isDead());
+
+        if (playerAlive) {
+            // 需求1：优先追击玩家（纯追玩家 BFS，不走翻板目标）
+            const dir = Enemy.prototype.findPath.call(this);
+            if (dir) {
+                const st = this._resolveStep(dir.dx, dir.dy, true);
+                const nx = st.col, ny = st.row;
+                if ((map && map.hasBox(nx, ny)) || _isCellBlocked(nx, ny, this) || isBlackHole(nx, ny)) {
+                    this._wanderRandomly();
+                    return;
+                }
+                this.gridX = nx; this.gridY = ny;
+                if (st.wrapped) {
+                    this.pixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+                    this.pixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+                    this.targetPixelX = this.pixelX;
+                    this.targetPixelY = this.pixelY;
+                    this.isMoving = false;
+                } else {
+                    this.targetPixelX = OFFSET_X + this.gridX * CELL_SIZE + BORDER_WIDTH;
+                    this.targetPixelY = OFFSET_Y + this.gridY * CELL_SIZE + BORDER_WIDTH;
+                    this.isMoving = true;
+                }
+                this.moveCooldown = getBoostedInterval(300);
+                return;
+            }
+            // 与玩家同格或不可达：游荡避免罚站（同格碰撞由 game.js 每帧检测处理）
+            this._wanderRandomly();
+            return;
+        }
+
+        // 需求2：玩家已被击杀 → 翻转地板（连续两格，同列或同行）
+        if (this._flipCurrentAndAdjacent()) {
+            this.moveCooldown = getBoostedInterval(ENEMY_FLIP_DELAY) + 400;
+            return;
+        }
+        // 无可翻格子 → 自由游荡
+        this._wanderRandomly();
+    }
+
+    // 重写到达逻辑：追玩家途中只碰撞玩家，不主动翻脚下地板
+    // （翻板仅在玩家死亡后由 _flipCurrentAndAdjacent 处理，符合"玩家被击杀后才去翻转"）
+    _onArrive() {
+        this.moveCooldown = getBoostedInterval(300);
+        if (player && (typeof player.isDead !== 'function' || !player.isDead()) &&
+            this.gridX === player.gridX && this.gridY === player.gridY) {
+            this._hitPlayer();
+        }
+    }
+
+    // 两格联动翻转：当前格 + 同列或同行连续相邻格（灰→白，干扰玩家通关）
+    // 优先选择一个能翻到灰格的方向，确保"连续两个、同列或同行"都尽量生效
     _flipCurrentAndAdjacent() {
         if (!map) return false;
-        let flippedAny = false;
+        // 候选方向：上/下/左/右（同列或同行连续两格）
         const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
-        const [dx, dy] = dirs[Math.floor(Math.random() * dirs.length)];
-        [[this.gridX, this.gridY], [this.gridX + dx, this.gridY + dy]].forEach(([c, r]) => {
-            if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
-            if (map.hasBox(c, r)) return;
-            if (map.isTileFlipped(c, r)) {
-                const t = map.tiles[r][c];
-                addPendingFlip(c, r, t.color, t.borderColor, map.cellColor, map.borderColor, true, getBoostedInterval(ENEMY_FLIP_DELAY));
-                flippedAny = true;
+        for (let i = dirs.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
+        }
+        for (const [dx, dy] of dirs) {
+            let flippedAny = false;
+            [[this.gridX, this.gridY], [this.gridX + dx, this.gridY + dy]].forEach(([c, r]) => {
+                if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+                if (map.hasBox(c, r)) return;
+                if (map.isTileFlipped(c, r)) {
+                    const t = map.tiles[r][c];
+                    addPendingFlip(c, r, t.color, t.borderColor, map.cellColor, map.borderColor, true, getBoostedInterval(ENEMY_FLIP_DELAY));
+                    flippedAny = true;
+                }
+            });
+            if (flippedAny) {
+                console.log('[BossMinion] 两格联动翻转（' + (dx === 0 ? '同行' : '同列') + '）');
+                return true;
             }
-        });
-        if (flippedAny) console.log('[BossMinion] 两格联动翻转（含邻格）');
-        return flippedAny;
+        }
+        return false;
     }
     // 小怪素材绘制（行走/硬直帧表切换；未加载时回落 Ghost 素材）
     draw(ctx) {

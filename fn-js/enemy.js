@@ -1446,6 +1446,7 @@ function spawnEnemyAt(type, col, row) {
         case 'Snowman': e = new Snowman(col, row); break;
         case 'Octopus': e = new Octopus(col, row); break;
         case 'Owl':     e = new Owl(col, row);     break;
+        case 'BossMinion': e = new BossMinion(col, row); break;
         default: console.warn(`[test] 未知怪物类型: ${type}`); return null;
     }
     enemies.push(e);
@@ -1464,7 +1465,9 @@ function killEnemy(e, immediate = false) {
     if (e.name === 'Owl') removeBlackHolesByOwner(e);
     const idx = enemies.indexOf(e);
     if (idx >= 0) enemies.splice(idx, 1);
-    if (!immediate) {
+    // BOSS 专属小怪：死亡不进复活队列（由幽灵王重新释放补充）
+    const isBossMinion = typeof BossMinion !== 'undefined' && e instanceof BossMinion;
+    if (!immediate && !isBossMinion) {
         respawnQueue.push({ type: e.name, col: e.spawnCol, row: e.spawnRow, timer: ENEMY_RESPAWN_TIME, spawned: false });
         console.log(`[enemy] ${e.name} 死亡, ${ENEMY_RESPAWN_TIME/1000}s后在(${e.spawnCol},${e.spawnRow})复活`);
     }
