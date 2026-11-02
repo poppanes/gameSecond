@@ -1461,8 +1461,10 @@ const grayAfter = (() => { let n = 0; for (let r = 0; r < ROWS; r++) for (let c 
 T('Z17a: BOSS 翻转执行（新增灰格 ≥ 14）', grayAfter - grayBefore >= 14);
 T('Z17b: 翻转伴随轰鸣音效入队', animations.length >= 0);
 bossKing.spawnTimer = 0;
+bossKing.px = OFFSET_X + 3 * CELL_SIZE; bossKing.py = OFFSET_Y + 100; bossKing.dir = -1;   // 重设图内深处（前序翻转用例的长 update 会把 BOSS 甩出图外，触发挂起）
 const enBefore = enemies.length;
 bossKing.update(16);   // spawnTimer 触发 → 进 spawn 状态
+console.log('[debug Z17c] state=' + bossKing.state + ' timer=' + bossKing.spawnTimer + ' px=' + Math.round(bossKing.px) + ' locked=' + JSON.stringify(bossKing._lockedCell) + ' enemies=' + enemies.length + ' testMode=' + game.testMode);
 T('Z17c: 释放进入 spawn 动画状态（移动停止）', bossKing.state === 'spawn');
 bossKing.update(900);  // 动画 800ms 播完 → 空降小怪
 T('Z17d: 释放动画播完空降小怪（enemies +1）', enemies.length === enBefore + 1);
