@@ -203,23 +203,24 @@ class BossKing {
         console.log('[Boss][LOG] 翻转预警 ' + (BOSS_CONFIG.flipWarnMs / 1000) + 's（' + cells.length + ' 格，行列见执行日志）');
     }
 
-    // 预警结束：真正执行翻转（白→灰；玩家站在被翻的白格上受伤）
+    // 预警结束：真正执行翻转（双向切换：原色→灰 / 已翻转→翻回原色；玩家站在被翻的格上受伤）
     _executeFlip(cells) {
         if (!map) return;
         let hitPlayer = false;
         cells.forEach(([c, r]) => {
             const t = map.tiles[r] && map.tiles[r][c];
             if (!t) return;
-            if (t.color === map.cellColor) {
-                t.color = map.flippedColor;
-                t.borderColor = map.flippedBorderColor;
-                t.flipped = true;
-                addFlipAnimation(c, r, map.cellColor, map.borderColor, map.flippedColor, map.flippedBorderColor);
-            }
+            const wasFlipped = t.color !== map.cellColor;   // 已翻转过？
+            const fromColor = t.color, fromBorder = t.borderColor;
+            // 双向切换：已翻转的格子翻回原色，未翻转的正常翻转（相反翻转）
+            t.color = wasFlipped ? map.cellColor : map.flippedColor;
+            t.borderColor = wasFlipped ? map.borderColor : map.flippedBorderColor;
+            t.flipped = !wasFlipped;
+            addFlipAnimation(c, r, fromColor, fromBorder, t.color, t.borderColor);
             if (player && !player.dying && player.gridX === c && player.gridY === r) hitPlayer = true;
         });
         if (hitPlayer && player && !player.dying) player.takeDamage(1);
-        console.log('[Boss][LOG] 幽灵王翻转执行（' + cells.length + ' 格）');
+        console.log('[Boss][LOG] 幽灵王翻转执行（' + cells.length + ' 格，双向切换）');
     }
 
 
@@ -309,19 +310,22 @@ class BossKing {
     // 血量条（BOSS 战顶部）
     drawHpBar(ctx) {
         if (this.state === 'dead') return;   // 死亡动画播完 → 血条一并移除
-        const w = 300, h = 16;
-        const x = (CANVAS_WIDTH - w) / 2, y = 60;
+        // 格子血条：一个格子 10 点血量（满血亮红、已扣暗格）；文字取消，后续可替换素材
+        const hpPerCell = 10;
+        const cells = Math.ceil(this.maxHp / hpPerCell);
+        const cw = 28, ch = 16, gap = 2;
+        const w = cells * cw + (cells - 1) * gap;
+        const x = (CANVAS_WIDTH - w) / 2, y = 108;
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
-        ctx.fillStyle = '#e94560';
-        ctx.fillRect(x, y, w * Math.max(0, this.hp / this.maxHp), h);
+        ctx.fillRect(x - 2, y - 2, w + 4, ch + 4);
+        for (let i = 0; i < cells; i++) {
+            const filled = this.hp > i * hpPerCell;
+            ctx.fillStyle = filled ? '#e94560' : 'rgba(255,255,255,0.12)';
+            ctx.fillRect(x + i * (cw + gap), y, cw, ch);
+        }
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, w, h);
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('BOSS ' + this.hp + '/' + this.maxHp, CANVAS_WIDTH / 2, y + h / 2 + 4);
+        ctx.strokeRect(x, y, w, ch);
     }
 
     // 受击（被小怪丢中）：掉血 + 闪烁 + 停止移动；返回是否死亡（B4 接死亡演出）

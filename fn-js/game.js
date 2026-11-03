@@ -89,6 +89,10 @@ class Game {
         this.gameOver = false;
         this.gameWin = false;
         this.score = 0;
+        // 暂停系统（P 键切换；面板：继续游戏/返回主界面/设置-音效开关）
+        this.paused = false;
+        this._pauseCursor = 0;
+        this._pausePage = 'menu';   // 'menu'=主面板 | 'settings'=设置页
         this._hiScore = parseInt((typeof localStorage !== 'undefined' && localStorage.getItem('fn_hi')) || '0', 10) || 0;   // 街机 HI-SCORE（持久化）
         
         // 关卡进度状态
@@ -192,8 +196,10 @@ class Game {
         }
         map.setPortals(config.portals);            // 传送门门对（关卡可选配置；15 回合内不配置）
         
-        // 初始化玩家（位置：第4列第4行）
+        // 初始化玩家（位置：第4列第4行）——生命值跨关保留（损血后进新关不回满）
+        const prevLives = (player && typeof player.lives === 'number' && player.lives > 0) ? player.lives : 2;
         player = new Player(3, 3);
+        player.lives = prevLives;
         
         // 初始化/更新输入控制器（复用，不重复绑定事件）
         if (!gameInput) {
@@ -544,12 +550,107 @@ class Game {
         requestAnimationFrame((t) => this.loop(t));
     }
     
+    // ===== 暂停系统 =====
+    togglePause() {
+        if (this.mode === 'menu') return;   // 菜单无暂停
+        this.paused = !this.paused;
+        this._pauseCursor = 0;
+        this._pausePage = 'menu';
+        console.log('[Game] 暂停：' + (this.paused ? '开' : '关'));
+    }
+
+    // 暂停面板按键（上下选择 / Enter 或空格确认 / Esc 设置页返回）
+    pauseKeyDown(code) {
+        if (this._pausePage === 'settings') {
+            if (code === 'Escape' || code === 'Backspace') { this._pausePage = 'menu'; this._pauseCursor = 2; return true; }
+        }
+        const opts = this._pausePage === 'settings' ? 1 : 3;
+        if (code === 'ArrowUp' || code === 'KeyW') { this._pauseCursor = (this._pauseCursor + opts - 1) % opts; return true; }
+        if (code === 'ArrowDown' || code === 'KeyS') { this._pauseCursor = (this._pauseCursor + 1) % opts; return true; }
+        if (code === 'Enter' || code === 'Space') { this._pauseConfirm(); return true; }
+        return false;
+    }
+
+    _pauseConfirm() {
+        if (this._pausePage === 'settings') {
+            // 设置页：切换音效开关
+            if (typeof AUDIO_CONFIG !== 'undefined') {
+                AUDIO_CONFIG.enabled = !AUDIO_CONFIG.enabled;
+                console.log('[设置] 音效：' + (AUDIO_CONFIG.enabled ? '开' : '关'));
+            }
+            return;
+        }
+        if (this._pauseCursor === 0) {
+            // 继续游戏：暂停在哪，就在哪开始
+            this.paused = false;
+            console.log('[Game] 继续游戏');
+        } else if (this._pauseCursor === 1) {
+            // 返回主界面：分数/血量不计入、不解锁下一关
+            this.paused = false;
+            this.bossMode = false;
+            this.bonusMode = false;
+            this.testMode = false;
+            this._bossVictory = false;
+            this.gameOver = false;
+            this.mode = 'menu';
+            this.menuCursor = 0;
+            enemies.length = 0;
+            if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+            if (typeof gameInput !== 'undefined' && gameInput) gameInput.enabled = true;
+            if (player) { player.invTimer = 0; }
+            console.log('[Game] 返回主界面（本局不计分）');
+        } else {
+            // 设置
+            this._pausePage = 'settings';
+            this._pauseCursor = 0;
+        }
+    }
+
+    // 暂停面板渲染（半透明遮罩 + 方框 + 选项；设置页含音效开关）
+    _renderPauseOverlay() {
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.72)';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        const isSettings = this._pausePage === 'settings';
+        const items = isSettings ? ['音效：' + ((typeof AUDIO_CONFIG !== 'undefined' && AUDIO_CONFIG.enabled) ? '开' : '关')] : ['继续游戏', '返回主界面', '设置'];
+        const boxW = 420, boxH = 118 + items.length * 64;
+        const bx = (CANVAS_WIDTH - boxW) / 2, by = (CANVAS_HEIGHT - boxH) / 2;
+        // 方框
+        ctx.fillStyle = '#101426';
+        ctx.strokeStyle = '#5ce1ff';
+        ctx.lineWidth = 4;
+        ctx.fillRect(bx, by, boxW, boxH);
+        ctx.strokeRect(bx, by, boxW, boxH);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 30px Arial';
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText(isSettings ? '设 置' : '暂 停', CANVAS_WIDTH / 2, by + 44);
+        for (let i = 0; i < items.length; i++) {
+            const sel = i === this._pauseCursor;
+            const iy = by + 108 + i * 64;
+            ctx.font = (sel ? 'bold ' : '') + '26px Arial';
+            ctx.fillStyle = sel ? '#ffd700' : '#cfd8ea';
+            if (sel) { ctx.fillStyle = '#ffd700'; ctx.fillText('▶ ' + items[i] + ' ◀', CANVAS_WIDTH / 2, iy); }
+            else ctx.fillText(items[i], CANVAS_WIDTH / 2, iy);
+        }
+        ctx.font = '16px Arial';
+        ctx.fillStyle = '#8fa3c8';
+        const tip = isSettings ? '[Enter] 切换音效   [Esc] 返回' : '[↑↓] 选择   [Enter] 确认   [P] 继续';
+        ctx.fillText(tip, CANVAS_WIDTH / 2, by + boxH - 16);
+        ctx.restore();
+    }
+
     update(dt) {
         // 防御 NaN：异常 dt 视为 0
         if (!isFinite(dt)) dt = 0;
-        
-        // 菜单模式：不更新游戏逻辑
-        if (this.mode === 'menu') return;
+
+        // 暂停中：一切内容停止（怪物/玩家/计时/特效全部冻结，仅渲染暂停面板）
+        if (this.paused) return;
+
+            // 菜单模式：不更新游戏逻辑
+            if (this.mode === 'menu') return;
         
         // 奖励关卡模式
         if (this.bonusMode) {
@@ -560,6 +661,8 @@ class Game {
         // BOSS 关卡模式：胜利演出独立处理；战斗系统复用下方普通主流程全量逻辑
         // （与测试地图完全同口径：敌人/碰撞/复活/特效/道具/面板一套代码）
         if (this.bossMode) {
+            // 失败（超时/玩家死亡链走完）后冻结战斗，GAME OVER 画面接管——时间也停止
+            if (this.gameOver) return;
             if (this._bossVictory) {
                 this._bossVictoryTimer -= dt;
                 if (this._bossVictoryTimer <= 0) {
@@ -840,6 +943,10 @@ class Game {
         if (this._bossVictory) {
             this._drawBossVictory();
         }
+        // 暂停面板（最上层：暂停时一切内容冻结，仅此面板活跃）
+        if (this.paused) {
+            this._renderPauseOverlay();
+        }
     }
 
     // BOSS 全通关感谢结算面板（THANK YOU + 倒计时自动回菜单）
@@ -1089,7 +1196,7 @@ class Game {
         ctx.textBaseline = 'middle';
         const y = (OFFSET_Y - 8) / 2;
 
-        // 左：生命 ♥（≤1 时红色告警）
+        // 左：生命 ♥（≤1 时红色告警）+ 回合数（hearts 右侧固定偏移，防遮挡）
         if (player) {
             const hearts = '♥'.repeat(Math.max(0, player.lives));
             ctx.font = '20px Arial';
@@ -1099,6 +1206,13 @@ class Game {
             ctx.lineWidth = 4;
             ctx.strokeText(hearts, OFFSET_X, y);
             ctx.fillText(hearts, OFFSET_X, y);
+            // 回合数（当前关卡序号，居 hearts 与 TIME 之间；固定 x 防止心数变化导致跳动）
+            const roundText = 'ROUND ' + (this.levelIndex + 1);
+            ctx.font = '16px Arial';
+            ctx.fillStyle = '#7fd7ff';
+            ctx.lineWidth = 4;
+            ctx.strokeText(roundText, OFFSET_X + 100, y);
+            ctx.fillText(roundText, OFFSET_X + 100, y);
         }
 
         // 中：TIME（testMode 时中部留给测试标签）

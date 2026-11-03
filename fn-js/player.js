@@ -82,6 +82,7 @@ class Player {
     takeDamage(amount = 1) {
         if (this.godMode) return this.lives;       // 测试无敌（Digit7 toggle）——一切伤害免疫
         if (this.invTimer > 0) return this.lives;  // 无敌中免疫（不刷新计时器）
+        console.log('[Player][LOG] takeDamage 触发：当前格 (' + this.gridX + ',' + this.gridY + ') lives=' + this.lives + ' invTimer=' + this.invTimer);
         if (this.dying) return this.lives;         // 死亡动画期间不再重复扣血
         this.lives = Math.max(0, this.lives - amount);
         this.invTimer = 800;  // 受伤后 800ms 无敌
@@ -328,6 +329,8 @@ class Player {
     }
     
     flipCurrentTile() {
+        // 拾取怪物中（头顶带怪）→ 禁止翻转格子
+        if (this.carriedGhost) return false;
         // 奖励关卡：翻牌逻辑交给 game.js
         if (game && game.bonusMode && game.bonusPhase === 'playing') {
             game.onBonusFlip(this.gridX, this.gridY);

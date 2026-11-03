@@ -84,6 +84,7 @@ class Enemy {
         this.isMoving = false;
         this.moveCooldown = 300;
         this.moveSpeed = ENEMY_MOVE_SPEED;
+        this._baseSpeed = ENEMY_MOVE_SPEED;   // 基础速度（投掷/被撞后落地恢复用，不被飞行速度污染）
 
         this.alive = true;
         this._killed = false;   // 防重复入复活队列
@@ -136,6 +137,8 @@ class Enemy {
         this.targetPixelX = this.pixelX;
         this.targetPixelY = this.pixelY;
         this.isMoving = false;
+        // 恢复基础速度（投掷/被撞时 moveSpeed 曾被改为飞行速度——硬直恢复后不得保留加速）
+        this.moveSpeed = this._baseSpeed || ENEMY_MOVE_SPEED;
         this.stunned = Math.max(this.stunned, 2000);   // 落地硬直至少 2s（拾取期间计时冻结，此处保底）
         if (typeof Sfx !== 'undefined') Sfx.play('land');   // [C] 落地音效
         console.log(`[enemy] ${this.name} 投掷落地，保持硬直 (${cx},${cy})`);
@@ -169,14 +172,14 @@ class Enemy {
     }
 
     /* ---- 被箱子推动 ---- */
-    pushTo(newCol, newRow) {
+    pushTo(newCol, newRow, delay = 0) {
         this.gridX = newCol;
         this.gridY = newRow;
-        this.pixelX = OFFSET_X + newCol * CELL_SIZE + BORDER_WIDTH;
-        this.pixelY = OFFSET_Y + newRow * CELL_SIZE + BORDER_WIDTH;
-        this.targetPixelX = this.pixelX;
-        this.targetPixelY = this.pixelY;
-        this.isMoving = false;
+        // 滑动到目标格（pushDelay 错峰——链式推动的传递感：最远先动、依次传递）
+        this.targetPixelX = OFFSET_X + newCol * CELL_SIZE + BORDER_WIDTH;
+        this.targetPixelY = OFFSET_Y + newRow * CELL_SIZE + BORDER_WIDTH;
+        this.pushDelay = delay;
+        this.isMoving = true;
         this.moveCooldown = 0;
         this.pushed = 800;  // 被推后 800ms 内暂停自主移动
     }
@@ -242,8 +245,8 @@ class Enemy {
 
             // [BOSS] 投掷怪（玩家丢出，非撞飞反弹）命中 BOSS 包围盒 → 掉血 + 投掷怪击碎消失
             if (this.flying && !this.bouncing && typeof bossKing !== 'undefined' && bossKing) {
-                const bw = CELL_SIZE * 2 * BOSS_CONFIG.scale;
-                const bh = CELL_SIZE * 2.4 * BOSS_CONFIG.scale;
+                const bw = 270 * BOSS_CONFIG.scale;    // 与 draw 的帧宽一致（270×scale）——判定盒=视觉盒
+                const bh = 304 * BOSS_CONFIG.scale;    // 与 draw 的帧高一致（304×scale）
                 const ccxx = this.pixelX + this.size / 2, ccyy = this.pixelY + this.size / 2;
                 if (ccxx > bossKing.px && ccxx < bossKing.px + bw && ccyy > bossKing.py && ccyy < bossKing.py + bh) {
                     bossKing.takeDamage(BOSS_CONFIG.hitDamage);
@@ -337,8 +340,8 @@ class Enemy {
             return;
         }
 
-        // 被推期间禁用自主移动
-        if (this.pushed > 0) {
+        // 被推期间禁用自主移动（isMoving=链式推动滑行，不受此拦截）
+        if (this.pushed > 0 && !this.isMoving) {
             this.pushed = Math.max(0, this.pushed - dt);
             return;
         }
@@ -349,6 +352,7 @@ class Enemy {
 
         // 滑行中（加速阶段移动更快）
         if (this.isMoving) {
+            if (this.pushDelay > 0) { this.pushDelay = Math.max(0, this.pushDelay - dt); return; }   // 链式推动错峰等待
             const dx = this.targetPixelX - this.pixelX;
             const dy = this.targetPixelY - this.pixelY;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -527,8 +531,8 @@ class Ghost extends Enemy {
             return;
         }
 
-        // 被推期间禁用自主移动
-        if (this.pushed > 0) {
+        // 被推期间禁用自主移动（isMoving=链式推动滑行，不受此拦截）
+        if (this.pushed > 0 && !this.isMoving) {
             this.pushed = Math.max(0, this.pushed - dt);
             return;
         }
@@ -539,6 +543,7 @@ class Ghost extends Enemy {
 
         // 滑行中（复用基类逻辑，加速阶段更快）
         if (this.isMoving) {
+            if (this.pushDelay > 0) { this.pushDelay = Math.max(0, this.pushDelay - dt); return; }   // 链式推动错峰等待
             const dx = this.targetPixelX - this.pixelX;
             const dy = this.targetPixelY - this.pixelY;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -786,6 +791,7 @@ class Spider extends Enemy {
         super(col, row, '../fn-image/spider.png', 'Spider');
         this.setFrames('../fn-image/spider_sheet.png');   // 6×8 帧表（素材包定版）
         this.moveSpeed = ENEMY_MOVE_SPEED * 0.5;  // 比 Ghost 慢一半
+        this._baseSpeed = this.moveSpeed;   // 基础速度（落地恢复用）
         this.moveTimer = 0;
         this.flipTimer = 0;
         // Spider 硬直素材
@@ -877,6 +883,7 @@ class Snowman extends Enemy {
         this.rageTimer = SNOWMAN_RAGE_DURATION;
         this.normalTimer = 0;
         this.moveSpeed = SNOWMAN_RAGE_SPEED;  // 狂暴快速
+        this._baseSpeed = ENEMY_MOVE_SPEED * 0.8;   // 雪人基础速度=normal 态（落地恢复用，rage 值由状态机管理）
         this.moveCooldown = 200;              // 狂暴快移
         this.flipTimer = 0;
         // 硬直素材
@@ -884,6 +891,32 @@ class Snowman extends Enemy {
         this.deathImageLoaded = false;
         this.deathImage.src = '../fn-image/snowmen_death.png';
         this.deathImage.onload = () => { this.deathImageLoaded = true; };
+    }
+
+    /* ---- 主动推箱：找相邻箱子推开（朝玩家方向优先，把玩家挤向障碍/边缘）---- */
+    _tryPushBox() {
+        if (!map || !player) return false;
+        const dirs = [[-1,0],[1,0],[0,-1],[0,1]].sort((a, b) => {
+            const da = Math.abs(this.gridX + a[0] - player.gridX) + Math.abs(this.gridY + a[1] - player.gridY);
+            const db = Math.abs(this.gridX + b[0] - player.gridX) + Math.abs(this.gridY + b[1] - player.gridY);
+            return da - db;   // 推动后离玩家更近的方向优先
+        });
+        for (const [dx, dy] of dirs) {
+            const nx = this.gridX + dx, ny = this.gridY + dy;
+            if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
+            if (map.hasBox(nx, ny)) {
+                if (map.pushBox(nx, ny, dx, dy)) {
+                    // 推成功 → 雪人进入箱原位（与章鱼一致）
+                    this.gridX = nx; this.gridY = ny;
+                    this.targetPixelX = OFFSET_X + nx * CELL_SIZE + BORDER_WIDTH;
+                    this.targetPixelY = OFFSET_Y + ny * CELL_SIZE + BORDER_WIDTH;
+                    this.isMoving = true;
+                    console.log('[Snowman] 推开箱子');
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     update(dt) {
@@ -930,6 +963,8 @@ class Snowman extends Enemy {
         if (this.moveCooldown > 0) return;
 
         if (this.rage) {
+            // 狂暴：优先推箱（把玩家挤向障碍/边缘）
+            if (this._tryPushBox()) { this.moveCooldown = getBoostedInterval(200); return; }
             // 狂暴：BFS 追击玩家
             const dir = this.findPath();
             if (dir) {
@@ -937,6 +972,10 @@ class Snowman extends Enemy {
                 const nx = st.col;
                 const ny = st.row;
                 if (!isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this)) {
+                    // 下一格有箱子 → 雪人推箱（箱子可推玩家/怪，被障碍挡则不动）
+                    if (map && map.hasBox(nx, ny)) {
+                        if (!map.pushBox(nx, ny, dir.dx, dir.dy)) return;
+                    }
                     this.gridX = nx; this.gridY = ny;
                     if (st.wrapped) {
                         // 传送瞬移：pixel 直接落位对侧
@@ -954,6 +993,8 @@ class Snowman extends Enemy {
                 }
             }
         } else {
+            // 正常：优先推箱（把玩家挤向障碍/边缘）
+            if (this._tryPushBox()) { this.moveCooldown = getBoostedInterval(400); return; }
             // 正常：识别已翻转地板去翻转
             const target = this._findFlippedTarget();
             if (target) {
@@ -963,6 +1004,10 @@ class Snowman extends Enemy {
                     const nx = st.col;
                     const ny = st.row;
                     if (!isBlackHole(nx, ny) && !_isCellBlocked(nx, ny, this)) {
+                        // 下一格有箱子 → 雪人推箱（箱子可推玩家/怪，被障碍挡则不动）
+                        if (map && map.hasBox(nx, ny)) {
+                            if (!map.pushBox(nx, ny, dir.dx, dir.dy)) return;
+                        }
                         this.gridX = nx; this.gridY = ny;
                         if (st.wrapped) {
                             // 传送瞬移：pixel 直接落位对侧

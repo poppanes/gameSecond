@@ -93,11 +93,18 @@ class GameInput extends InputHandler {
             game.menuKeyDown(code);
             return;
         }
+        // 暂停：P 键切换（所有游玩模式）；暂停中所有按键交给暂停面板
+        if (game && game.mode !== 'menu') {
+            if (code === 'KeyP') { game.togglePause(); return; }
+            if (game.paused) {
+                if (game.pauseKeyDown(code)) return;
+            }
+        }
         // 测试地图：测试专用键转发（移动键仍走下方正常移动逻辑）
         if (game && game.testMode) {
             const testKeys = ['Digit1','Digit2','Digit3','Digit4','Digit5','Digit8',
                               'KeyQ','KeyE','KeyR','KeyT','KeyC','KeyG','KeyF',
-                              'KeyI','KeyP','KeyO','Digit6','Digit7',
+                              'KeyI','KeyO','Digit6','Digit7',
                               'Escape','Backspace'];
             if (testKeys.includes(code)) {
                 game.testKeyDown(code);

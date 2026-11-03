@@ -1570,6 +1570,118 @@ addPendingFlip(4, 2, map.cellColor, map.borderColor, map.flippedColor, map.flipp
 updatePendingFlips(200);
 Sfx.playEnemyFlip = origEF;
 T('A6: 怪物翻板播低沉音（playEnemyFlip 调用）', efCalls.length === 1);
+// --- Z21: 推怪链（角色→箱子→怪链：全链一起移动/到边缘全部出图/怪物不穿箱）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+map.boxGrid[6][0] = false; map.boxGrid[6][1] = false; map.boxGrid[6][2] = false; map.boxGrid[6][3] = true;
+
+const zA1 = new Ghost(2, 6), zA2 = new Ghost(1, 6), zA3 = new Ghost(0, 6); enemies.push(zA1, zA2, zA3);
+
+zA1.alive = true; zA1.warning = 0; zA1.stunned = 0; zA2.alive = true; zA2.warning = 0; zA2.stunned = 0; zA3.alive = true; zA3.warning = 0; zA3.stunned = 0;
+
+player.gridX = 4; player.gridY = 6; player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;   // 推：链 [zA1, zA2, zA3]——链尾 (-1,6) 出界 → 全部推出图外
+
+console.log('[debug Z21a] zA1=' + zA1.gridX + ',' + zA1.alive + ' zA2=' + zA2.gridX + ',' + zA2.alive + ' zA3=' + zA3.gridX + ',' + zA3.alive + ' box2=' + map.boxGrid[6][2]);
+T('Z21a: 推1 只推第一只怪（叠到下一只上，不出图）', zA1.gridX === 1 && zA2.gridX === 1 && zA3.gridX === 0 && zA1.alive === true && zA2.alive === true && zA3.alive === true && map.boxGrid[6][2] === true);
+
+T('Z21b: 推怪出图后玩家存活', player.lives > 0 && player.dying !== true);
+
+// 保持间距推进（链尾空格）+ 传递动画（靠近箱先动，90ms/只）
+
+enemies.length = 0;
+
+map.boxGrid[6][4] = true; map.boxGrid[6][3] = false; map.boxGrid[6][2] = false; map.boxGrid[6][1] = false; map.boxGrid[6][0] = false;
+
+const zB1 = new Ghost(3, 6), zB2 = new Ghost(2, 6), zB3 = new Ghost(1, 6); enemies.push(zB1, zB2, zB3);
+
+zB1.alive = true; zB1.warning = 0; zB1.stunned = 0; zB2.alive = true; zB2.warning = 0; zB2.stunned = 0; zB3.alive = true; zB3.warning = 0; zB3.stunned = 0;
+
+player.gridX = 5; player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;   // 推：链尾 (0,6) 空 → 保持间距推进（靠近箱先动）
+
+game.update(50);
+
+T('Z21c: 推1 只推第一只怪（叠到下一只上）', zB1.gridX === 2 && zB2.gridX === 2 && zB3.gridX === 1 && map.boxGrid[6][3] === true);
+
+T('Z21d: 链尾出图后其余怪全部存活', zB1.alive === true && zB2.alive === true);
+
+enemies.length = 0;
+
+// 怪物不穿箱：链尾被箱子阻挡 → 推不动
+
+map.boxGrid[6][4] = false; map.boxGrid[6][3] = true; map.boxGrid[6][0] = true;
+
+const zC1 = new Ghost(3, 6), zC2 = new Ghost(2, 6), zC3 = new Ghost(1, 6); enemies.push(zC1, zC2, zC3);
+
+zC1.alive = true; zC1.warning = 0; zC1.stunned = 0; zC2.alive = true; zC2.warning = 0; zC2.stunned = 0; zC3.alive = true; zC3.warning = 0; zC3.stunned = 0;
+
+player.gridX = 5; player.isMoving = false;
+
+player.move(-1, 0);
+
+T('Z21e: 链尾被箱子阻挡 → 推不动（怪物不穿箱）', zC1.gridX === 3 && zC2.gridX === 2 && zC3.gridX === 1 && map.boxGrid[6][3] === true && map.boxGrid[6][0] === true);
+
+enemies.length = 0; map.setPortals([]);
+
+if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+// Z21f: 长链实测（6 只怪逐格挤压 → 全部出图，无数量限制）
+map.boxGrid[6][6] = true; map.boxGrid[6][5] = false; map.boxGrid[6][4] = false; map.boxGrid[6][3] = false; map.boxGrid[6][2] = false; map.boxGrid[6][1] = false; map.boxGrid[6][0] = false;
+const zlong = []; for (let k = 0; k < 6; k++) { const g = new Ghost(k, 6); g.alive = true; g.warning = 0; g.stunned = 0; enemies.push(g); zlong.push(g); }
+player.gridX = 7; player.gridY = 6; player.isMoving = false;
+for (let k = 0; k < 7; k++) { player.move(-1, 0); player.isMoving = false; }   // 推 7 次：6 次挤压叠到边缘 + 1 次到最后一格全出
+console.log('[debug Z21f] ' + zlong.map(g => g.gridX + ',' + g.alive).join(' | ') + ' box0=' + map.boxGrid[6][0] + ' box6=' + map.boxGrid[6][6] + ' player=' + player.gridX);
+T('Z21f: 6 只怪长链全部推出图外（无数量限制）', zlong.every(g => g.alive === false));
+T('Z21g: 玩家推完长链后存活', player.lives > 0 && player.dying !== true);
+// Z21h/i: 怪下一格是箱子/墙 → 击杀（上下左右任意方向）
+enemies.length = 0; map.setPortals([]);
+map.boxGrid[6][3] = true; map.boxGrid[6][2] = false; map.boxGrid[6][1] = true;   // 箱 (3,6)、箱 (1,6)
+const kb1 = new Ghost(2, 6); enemies.push(kb1);
+kb1.alive = true; kb1.warning = 0; kb1.stunned = 0;
+player.gridX = 4; player.isMoving = false;
+player.move(-1, 0); player.isMoving = false;   // 推箱 → 怪下一格 (1,6) 是箱子 → 击杀
+T('Z21h: 怪下一格是箱子 → 击杀', kb1.alive === false && map.boxGrid[6][2] === true);
+enemies.length = 0; map.setPortals([]);
+map.boxGrid[6][3] = true; map.boxGrid[6][2] = false; map.boxGrid[6][1] = false;   // 清 Z21h 残留箱
+map.wallGrid[6][1] = true;   // 墙 (1,6)
+const kw1 = new Ghost(2, 6); enemies.push(kw1);
+kw1.alive = true; kw1.warning = 0; kw1.stunned = 0;
+player.gridX = 4; player.isMoving = false;
+player.move(-1, 0); player.isMoving = false;   // 推箱 → 怪下一格 (1,6) 是墙 → 击杀
+console.log('[debug Z21i] kw1=' + kw1.gridX + ',' + kw1.alive + ' box2=' + map.boxGrid[6][2] + ' box3=' + map.boxGrid[6][3] + ' wall1=' + map.wallGrid[6][1] + ' tile1=' + map.tiles[6][1].type + ' player=' + player.gridX);
+T('Z21i: 怪下一格是墙 → 击杀', kw1.alive === false && map.boxGrid[6][2] === true);
+// --- Z22: 暂停系统（P 键/继续/返回主界面/设置音效）---
+game.loadLevel(0); game.testMode = false; game.paused = false;
+const scoreZ22 = game.score;
+game.togglePause();
+T('Z22a: P 暂停开启', game.paused === true);
+const timeAtPause = game.timeLeft;
+game.update(500);
+T('Z22b: 暂停中内容冻结（时间不走）', game.timeLeft === timeAtPause);
+game.pauseKeyDown('Enter');
+T('Z22c: 继续游戏（暂停处恢复）', game.paused === false);
+game.togglePause();
+game.pauseKeyDown('ArrowDown'); game.pauseKeyDown('ArrowDown'); game.pauseKeyDown('Enter');
+const audioBefore = AUDIO_CONFIG.enabled;
+game.pauseKeyDown('Enter');
+T('Z22d: 设置页音效开关切换', AUDIO_CONFIG.enabled === !audioBefore);
+game.pauseKeyDown('Enter'); game.pauseKeyDown('Escape');
+game.pauseKeyDown('ArrowUp'); game.pauseKeyDown('ArrowUp'); game.pauseKeyDown('ArrowDown');
+game.pauseKeyDown('Enter');
+T('Z22e: 返回主界面（mode=menu、本局不计分）', game.mode === 'menu' && game.score === scoreZ22 && game.paused === false);
+game.paused = false; game.loadLevel(0);
+map.wallGrid[6][1] = false;
+enemies.length = 0;
+enemies.length = 0; map.boxGrid[6][6] = false; map.boxGrid[6][0] = false;
+
+game.testMode = false;
+
 // --- Z20: BOSS 死亡演出 + 感谢结算 + PVP 接口 ---
 game.loadLevel(LEVELS.length - 1);
 const pvpCalls = [];

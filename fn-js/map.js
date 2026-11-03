@@ -286,9 +286,11 @@ class Map {
             const eOutOfBounds = eNextCol < 0 || eNextCol >= this.cols || eNextRow < 0 || eNextRow >= this.rows;
             const eNextStone = !eOutOfBounds && this.stoneGrid[eNextRow][eNextCol];
             const eNextHole = !eOutOfBounds && typeof isBlackHole === 'function' && isBlackHole(eNextCol, eNextRow);
-            
-            // 推动方向是边界/石头/黑洞 → 目标格所有怪物死亡
-            if (eOutOfBounds || eNextStone || eNextHole) {
+            const eNextBox = !eOutOfBounds && this.boxGrid[eNextRow][eNextCol];
+            const eNextWall = !eOutOfBounds && (this.wallGrid[eNextRow][eNextCol] || this.tiles[eNextRow][eNextCol].type === 'wall' || this.tiles[eNextRow][eNextCol].type === 'obstacle');
+
+            // 推动方向的下一格是石头/黑洞/箱子/墙（上下左右任意方向）→ 目标格所有怪物被挤死
+            if (eNextStone || eNextHole || eNextBox || eNextWall) {
                 this.boxGrid[boxRow][boxCol] = false;
                 const newCorner = (newCol === 0 || newCol === this.cols - 1) &&
                                    (newRow === 0 || newRow === this.rows - 1);
@@ -303,33 +305,36 @@ class Map {
                 return true;
             }
             
-            // 怪物在边界内：检测下一格是否可通行 → 推动到下一格
-            const e = enemiesOnCell[0];
-            const canPush = !this.boxGrid[eNextRow][eNextCol] &&
-                !enemies.some(other => other !== e && other.alive &&
-                    other.gridX === eNextCol && other.gridY === eNextRow);
-            if (canPush) {
+                        // 条件 C：目标位置有怪物 → 只推紧邻箱子的第一只怪（叠到下一只怪上），后续怪完全不动；箱子推到最后一格（边缘）→ 整叠怪全部出图
+            if (enemiesOnCell.length > 0) {
+                const eNextCol = newCol + dx;
+                const eNextRow = newRow + dy;
+                // 箱子这次推动后到达边缘格（最后一格）→ 整叠怪全部出图；否则只挤压叠怪（尾部怪没被箱子推到就不出图）
+                const boxReachesEdge = (dx < 0 && newCol === 0) || (dx > 0 && newCol === this.cols - 1) ||
+                    (dy < 0 && newRow === 0) || (dy > 0 && newRow === this.rows - 1);
+
                 this.boxGrid[boxRow][boxCol] = false;
                 this.boxGrid[newRow][newCol] = true;
-                e.pushTo(eNextCol, eNextRow);
-                console.log(`[pushBox] → 箱子推动 ${e.name} (${newCol},${newRow}) → (${eNextCol},${eNextRow})`);
-                // 同一格有多余怪物 → 也推出（极端情况，保底处理）
-                if (enemiesOnCell.length > 1) {
-                    for (let i = 1; i < enemiesOnCell.length; i++) {
-                        enemiesOnCell[i].alive = false;
+
+                if (boxReachesEdge) {
+                    // 箱子推到最后一格：目标格所有怪物（含叠加的）一起退出地图外
+                    enemiesOnCell.forEach(e => { e.alive = false; });
+                    const newCorner = (newCol === 0 || newCol === this.cols - 1) &&
+                                       (newRow === 0 || newRow === this.rows - 1);
+                    if (newCorner) {
+                        this.boxGrid[newRow][newCol] = false;
+                        spawnItem(newCol, newRow, true);
+                        console.log(`[pushBox] → 推到角落(${newCol},${newRow})，箱子消失`);
                     }
-                    console.log(`[pushBox] → 同一格多余 ${enemiesOnCell.length - 1} 只怪物被推出`);
+                    console.log(`[pushBox] → 全部 ${enemiesOnCell.length} 只怪物一起被推出地图外`);
+                    return true;
                 }
+
+                // 推该格全部堆叠怪（堆叠整体移动——叠到下一格继续叠加；后续格的怪不动，等箱子追上）
+                enemiesOnCell.forEach(e => { e.pushTo(eNextCol, eNextRow); });
+                console.log(`[pushBox] → 箱子推动 ${enemiesOnCell.length} 只堆叠怪 (${newCol},${newRow}) → (${eNextCol},${eNextRow})`);
                 return true;
             }
-            console.log(`[pushBox] → 怪物推不动，箱子也无法移动`);
-            return false;
-        }
-        
-        // 黑洞不可通行：箱子不能被推入黑洞（与墙/石头同性质）
-        if (typeof isBlackHole === 'function' && isBlackHole(newCol, newRow)) {
-            console.log(`[pushBox] → 目标格(${newCol},${newRow})是黑洞，箱子不能被推入`);
-            return false;
         }
         // 石头或障碍物不能通行
         if (this.stoneGrid[newRow][newCol]) return false;
@@ -344,13 +349,14 @@ class Map {
             const pNextStone = !pNextOutOfBounds && this.stoneGrid[pNextRow][pNextCol];
             const pNextBox = !pNextOutOfBounds && this.boxGrid[pNextRow][pNextCol];
             const pNextHole = !pNextOutOfBounds && typeof isBlackHole === 'function' && isBlackHole(pNextCol, pNextRow);
-            
+            const pNextWall = !pNextOutOfBounds && (this.wallGrid[pNextRow][pNextCol] || this.tiles[pNextRow][pNextCol].type === 'wall' || this.tiles[pNextRow][pNextCol].type === 'obstacle');
+
             // 移动箱子到玩家位置
             this.boxGrid[boxRow][boxCol] = false;
             this.boxGrid[newRow][newCol] = true;
-            
-            if (pNextOutOfBounds || pNextStone || pNextBox || pNextHole) {
-                // 玩家被推到边界/石头/箱子/黑洞 → 扣1条命（死亡动画由死亡链统一处理：1.5s 后重生 / 命尽 game over）
+
+            if (pNextOutOfBounds || pNextStone || pNextBox || pNextHole || pNextWall) {
+                // 玩家被推到边界/石头/箱子/黑洞/墙 → 扣1条命（死亡动画由死亡链统一处理：1.5s 后重生 / 命尽 game over）
                 player.invTimer = 0;
                 player.takeDamage(1);
                 console.log(`[pushBox] → 箱子把玩家推出 (${pNextCol},${pNextRow}) 玩家受伤,生命:${player.lives}`);

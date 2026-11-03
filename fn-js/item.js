@@ -160,6 +160,11 @@ class Item {
                 }
                 break;
             case 'flip':
+                // 玩家拾取怪物中（头顶带怪）→ 翻转卡不触发（拾取硬直怪期间禁止翻转格子）
+                if (player && player.carriedGhost) {
+                    console.log('[Item] 拾取怪物中，翻转卡不触发');
+                    break;
+                }
                 // 翻转卡：flip1=相邻两行整行横翻；flip2=相邻3列整列纵翻
                 // 优先级：靠近已翻转格的白格先翻（涟漪从已有灰色区域向外蔓延），无已翻转格时以玩家位置为起点
                 if (player && map) {
