@@ -128,8 +128,17 @@ class Enemy {
     _landStunned() {
         this.flying = false;
         this.bouncing = false;
-        const cx = Math.max(0, Math.min(COLS - 1, Math.round((this.pixelX - OFFSET_X) / CELL_SIZE)));
-        const cy = Math.max(0, Math.min(ROWS - 1, Math.round((this.pixelY - OFFSET_Y) / CELL_SIZE)));
+        let cx = Math.max(0, Math.min(COLS - 1, Math.round((this.pixelX - OFFSET_X) / CELL_SIZE)));
+        let cy = Math.max(0, Math.min(ROWS - 1, Math.round((this.pixelY - OFFSET_Y) / CELL_SIZE)));
+        // 落点被箱子/石头/墙占据 → 沿飞行反方向退到最近空格（防落在障碍格上与障碍穿模）
+        if (map && (map.hasBox(cx, cy) || map.hasStone(cx, cy) || map.hasWall(cx, cy) || (typeof isBlackHole === 'function' && isBlackHole(cx, cy)))) {
+            const backDx = -(this.flyDx || 0), backDy = -(this.flyDy || 0);
+            for (let step = 1; step <= 3; step++) {
+                const tx = cx + backDx * step, ty = cy + backDy * step;
+                if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) break;
+                if (!map.hasBox(tx, ty) && !map.hasStone(tx, ty) && !map.hasWall(tx, ty) && !(typeof isBlackHole === 'function' && isBlackHole(tx, ty))) { cx = tx; cy = ty; break; }
+            }
+        }
         this.gridX = cx;
         this.gridY = cy;
         this.pixelX = OFFSET_X + cx * CELL_SIZE + BORDER_WIDTH;
@@ -180,6 +189,7 @@ class Enemy {
         this.targetPixelY = OFFSET_Y + newRow * CELL_SIZE + BORDER_WIDTH;
         this.pushDelay = delay;
         this.isMoving = true;
+        this._pushSpeed = 2.5;   // 被推快速滑行（防慢速怪与跟进的箱子视觉重叠——慢速怪 0.5× 滑一格 360ms 太久）
         this.moveCooldown = 0;
         this.pushed = 800;  // 被推后 800ms 内暂停自主移动
     }
@@ -361,12 +371,21 @@ class Enemy {
                 this.pixelX = this.targetPixelX;
                 this.pixelY = this.targetPixelY;
                 this.isMoving = false;
+                this._pushSpeed = 0;
                 this._onArrive();
             } else {
-                const spd = getBoostedSpeed(this.moveSpeed);
-                const step = Math.min(spd * dt, dist);
-                this.pixelX += (dx / dist) * step;
-                this.pixelY += (dy / dist) * step;
+                const spd = this._pushSpeed ? this._pushSpeed : getBoostedSpeed(this.moveSpeed);   // 被推快速滑行 > 自主速度
+                if (this._pushSpeed && dist < spd * dt) {
+                    this.pixelX = this.targetPixelX;
+                    this.pixelY = this.targetPixelY;
+                    this.isMoving = false;
+                    this._pushSpeed = 0;
+                    this._onArrive();
+                } else {
+                    const step = Math.min(spd * dt, dist);
+                    this.pixelX += (dx / dist) * step;
+                    this.pixelY += (dy / dist) * step;
+                }
             }
             return;
         }
@@ -388,8 +407,8 @@ class Enemy {
     _onArrive() {
         let cooldown = getBoostedInterval(300);
 
-        // 翻回白色地板（加速阶段翻板更快）
-        if (map && map.isTileFlipped(this.gridX, this.gridY)) {
+        // 翻回白色地板（加速阶段翻板更快）——收尾模式（剩 ≤3 白格）时停止，让玩家能收尾结算
+        if (map && map.isTileFlipped(this.gridX, this.gridY) && !(map.isEndgame && map.isEndgame())) {
             const t = map.tiles[this.gridY][this.gridX];
             addPendingFlip(this.gridX, this.gridY,
                 t.color, t.borderColor,
@@ -551,12 +570,21 @@ class Ghost extends Enemy {
                 this.pixelX = this.targetPixelX;
                 this.pixelY = this.targetPixelY;
                 this.isMoving = false;
+                this._pushSpeed = 0;
                 this._onArrive();
             } else {
-                const spd = getBoostedSpeed(this.moveSpeed);
-                const step = Math.min(spd * dt, dist);
-                this.pixelX += (dx / dist) * step;
-                this.pixelY += (dy / dist) * step;
+                const spd = this._pushSpeed ? this._pushSpeed : getBoostedSpeed(this.moveSpeed);   // 被推快速滑行 > 自主速度
+                if (this._pushSpeed && dist < spd * dt) {
+                    this.pixelX = this.targetPixelX;
+                    this.pixelY = this.targetPixelY;
+                    this.isMoving = false;
+                    this._pushSpeed = 0;
+                    this._onArrive();
+                } else {
+                    const step = Math.min(spd * dt, dist);
+                    this.pixelX += (dx / dist) * step;
+                    this.pixelY += (dy / dist) * step;
+                }
             }
             return;
         }
@@ -814,7 +842,7 @@ class Spider extends Enemy {
         // 硬直
         if (this.stunned > 0) { this.stunned = Math.max(0, this.stunned - dt); return; }
         // 被推
-        if (this.pushed > 0) { this.pushed = Math.max(0, this.pushed - dt); return; }
+        if (this.pushed > 0 && !this.isMoving) { this.pushed = Math.max(0, this.pushed - dt); return; }   // 被推滑行中放行（防与箱子视觉重叠 800ms）
 
         // 随机游走（加速阶段更快）
         this.moveTimer += dt;
@@ -846,8 +874,8 @@ class Spider extends Enemy {
         // 平滑移动
         if (this.isMoving) {
             const dx=this.targetPixelX-this.pixelX, dy=this.targetPixelY-this.pixelY, dist=Math.sqrt(dx*dx+dy*dy);
-            if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; }
-            else { const step=Math.min(this.moveSpeed*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; }
+            if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; }
+            else { const spd=this._pushSpeed?this._pushSpeed:getBoostedSpeed(this.moveSpeed); if (this._pushSpeed && dist < spd*dt) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; } else { const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; } }
         }
 
         // 低频概率翻板（toggle：灰→白 或 白→灰）
@@ -926,7 +954,7 @@ class Snowman extends Enemy {
         if (this.flying) { super.update(dt); return; }
         if (this.carried) { this.gridX=player.gridX; this.gridY=player.gridY; this.pixelX=player.pixelX; this.pixelY=player.pixelY; return; }
         if (this.stunned > 0) { this.stunned = Math.max(0, this.stunned - dt); return; }
-        if (this.pushed > 0) { this.pushed = Math.max(0, this.pushed - dt); return; }
+        if (this.pushed > 0 && !this.isMoving) { this.pushed = Math.max(0, this.pushed - dt); return; }   // 被推滑行中放行（防与箱子视觉重叠 800ms）
 
         // 状态切换
         if (this.rage) {
@@ -955,7 +983,7 @@ class Snowman extends Enemy {
         if (this.isMoving) {
             const dx=this.targetPixelX-this.pixelX, dy=this.targetPixelY-this.pixelY, dist=Math.sqrt(dx*dx+dy*dy);
             if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._onArrive(); }
-            else { const spd=getBoostedSpeed(this.moveSpeed); const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; }
+            else { const spd=this._pushSpeed?this._pushSpeed:getBoostedSpeed(this.moveSpeed); if (this._pushSpeed && dist < spd*dt) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; } else { const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; } }
             return;
         }
 
@@ -1125,7 +1153,7 @@ class Octopus extends Enemy {
         if (this.flying) { super.update(dt); return; }
         if (this.carried) { this.gridX=player.gridX; this.gridY=player.gridY; this.pixelX=player.pixelX; this.pixelY=player.pixelY; return; }
         if (this.stunned > 0) { this.stunned = Math.max(0, this.stunned - dt); return; }
-        if (this.pushed > 0) { this.pushed = Math.max(0, this.pushed - dt); return; }
+        if (this.pushed > 0 && !this.isMoving) { this.pushed = Math.max(0, this.pushed - dt); return; }   // 被推滑行中放行（防与箱子视觉重叠 800ms）
 
         // 计算与玩家距离（曼哈顿）
         this.distX = Math.abs(this.gridX - player.gridX);
@@ -1141,8 +1169,8 @@ class Octopus extends Enemy {
         // 平滑移动（加速阶段更快）
         if (this.isMoving) {
             const dx=this.targetPixelX-this.pixelX, dy=this.targetPixelY-this.pixelY, dist=Math.sqrt(dx*dx+dy*dy);
-            if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; }
-            else { const spd=getBoostedSpeed(this.moveSpeed); const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; }
+            if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; }
+            else { const spd=this._pushSpeed?this._pushSpeed:getBoostedSpeed(this.moveSpeed); if (this._pushSpeed && dist < spd*dt) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; } else { const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; } }
             return;
         }
 
@@ -1215,11 +1243,11 @@ class Octopus extends Enemy {
         }
         if (!moved) console.log(`[Octopus] 所有方向被阻，停在 (${this.gridX},${this.gridY})`);
 
-        // 低频翻转（加速阶段更快）
+        // 低频翻转（加速阶段更快）——收尾模式（剩 ≤3 白格）时停止，与其他怪一致
         this.flipTimer += dt;
         if (this.flipTimer >= getBoostedInterval(OCTOPUS_FLIP_INTERVAL)) {
             this.flipTimer = 0;
-            if (Math.random()<OCTOPUS_FLIP_CHANCE && map && map.isTileFlipped(this.gridX,this.gridY)) {
+            if (Math.random()<OCTOPUS_FLIP_CHANCE && map && map.isTileFlipped(this.gridX,this.gridY) && !(map.isEndgame && map.isEndgame())) {
                 const t=map.tiles[this.gridY][this.gridX];
                 addPendingFlip(this.gridX,this.gridY, t.color,t.borderColor,
                     map.cellColor, map.borderColor, true, getBoostedInterval(ENEMY_FLIP_DELAY));
@@ -1259,13 +1287,13 @@ class Owl extends Enemy {
         if (this.flying) { super.update(dt); return; }
         if (this.carried) { this.gridX=player.gridX; this.gridY=player.gridY; this.pixelX=player.pixelX; this.pixelY=player.pixelY; return; }
         if (this.stunned > 0) { this.stunned = Math.max(0, this.stunned - dt); return; }
-        if (this.pushed > 0) { this.pushed = Math.max(0, this.pushed - dt); return; }
+        if (this.pushed > 0 && !this.isMoving) { this.pushed = Math.max(0, this.pushed - dt); return; }   // 被推滑行中放行（防与箱子视觉重叠 800ms）
 
         // 平滑移动（加速阶段更快）
         if (this.isMoving) {
             const dx=this.targetPixelX-this.pixelX, dy=this.targetPixelY-this.pixelY, dist=Math.sqrt(dx*dx+dy*dy);
-            if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; }
-            else { const spd=getBoostedSpeed(this.moveSpeed); const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; }
+            if (dist<0.5) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; }
+            else { const spd=this._pushSpeed?this._pushSpeed:getBoostedSpeed(this.moveSpeed); if (this._pushSpeed && dist < spd*dt) { this.pixelX=this.targetPixelX; this.pixelY=this.targetPixelY; this.isMoving=false; this._pushSpeed=0; } else { const step=Math.min(spd*dt,dist); this.pixelX+=(dx/dist)*step; this.pixelY+=(dy/dist)*step; } }
             return;
         }
 
@@ -1533,6 +1561,7 @@ function processRespawn(dt) {
                 continue;
             }
             rq.spawned = true;
+            if (typeof Sfx !== 'undefined') Sfx.play('respawn');   // [C] 怪物重生出现音
             if (rq.type === 'Ghost') {
                 const g = new Ghost(rq.col, rq.row); g.warning = rq.timer; enemies.push(g);
                 console.log(`[enemy] Ghost 预警 (${rq.col},${rq.row}) ${Math.ceil(rq.timer/1000)}s后激活`);

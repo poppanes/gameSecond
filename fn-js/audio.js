@@ -34,6 +34,19 @@ const SFX_DEFS = {
     clear:    { type: 'square',   seq: [523, 659, 784, 1046], dur: 0.12, vol: 0.6 },  // 通关：上扬琶音
     gameover: { type: 'square',   seq: [440, 349, 294, 220],  dur: 0.18, vol: 0.6 },  // 失败：下降琶音
     timeout:  { type: 'square',   seq: [392, 330, 262],       dur: 0.15, vol: 0.6 },  // 超时：三音下降
+    pushBox:  { type: 'square',   freq: 150,  endFreq: 90,   dur: 0.08, vol: 0.5 },  // 推箱：低频闷推
+    boxBreak: { type: 'noise',    dur: 0.2,   vol: 0.6 },                             // 箱子撞毁/角落掉落：碎裂噪声
+    bossDefeat: { type: 'square', seq: [392, 523, 659, 784, 1046, 1318], dur: 0.14, vol: 0.65 }, // BOSS 击败：长胜利琶音
+    bossHurt: { type: 'sawtooth', freq: 250,  endFreq: 100,  dur: 0.15, vol: 0.6 },  // BOSS 受击：中频骤降
+    respawn:  { type: 'triangle', freq: 300,  endFreq: 900,  dur: 0.15, vol: 0.5 },  // 重生出现：快速上滑
+    throwStart: { type: 'square', freq: 300,  endFreq: 600,  dur: 0.1,  vol: 0.5 },  // 投掷起手：上抛
+    hammer:   { type: 'square',   freq: 440,  endFreq: 110,  dur: 0.25, vol: 0.65 }, // 铁锤：重击下砸
+    snow:     { type: 'triangle', freq: 1200, endFreq: 300,  dur: 0.4,  vol: 0.5 },  // 雪花冰冻：长下滑
+    flipCard: { type: 'square',   freq: 660,  endFreq: 1320, dur: 0.12, vol: 0.55 }, // 翻转卡：高八度上扬
+    pause:    { type: 'square',   freq: 880,  endFreq: 440,  dur: 0.1,  vol: 0.5 },  // 暂停：下行
+    resume:   { type: 'square',   freq: 440,  endFreq: 880,  dur: 0.1,  vol: 0.5 },  // 继续：上行
+    revive:   { type: 'triangle', seq: [523, 784, 1046],      dur: 0.12, vol: 0.55 }, // 复活/双倍：三音上扬
+    tick:     { type: 'square',   freq: 1100, endFreq: 1100, dur: 0.03, vol: 0.4 },  // 倒计时警告：急促短哔
 };
 
 const Sfx = {

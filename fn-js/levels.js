@@ -285,7 +285,7 @@ const LEVELS = [
         "...H....",
       ] },
     //20
-    { id: 24, name: 'ROUND 20', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Snowman: 2 },portals:[(0,3),(7,3)],
+    { id: 24, name: 'ROUND 20', type: 'normal', tier: 2, enemies: { Spider: 1, Snowman: 2 },portals:[(0,3),(7,3)],
       layout: [
         "........",
         "........",
@@ -311,13 +311,13 @@ const LEVELS = [
     //22
     { id: 27, name: 'ROUND 22', type: 'normal', tier: 2, enemies: { Spider: 1, Owl: 1, Snowman: 1 },portals:[(0,3),(7,3)],
       layout: [
-        "....B...",
+        "....S...",
         "....S...",
         "..BBS.SB",
         "....S.B.",
         "..BBS.SB",
         "....S...",
-        "....B...",
+        "....S...",
       ] },
     //23
     { id: 28, name: 'ROUND 23', type: 'normal', tier: 2, enemies: { Ghost: 1, Octopus: 1, Snowman: 1 },portals:[(0,1),(7,1),(0,5),(7,5)],

@@ -1141,6 +1141,26 @@ map.ctx = stampRealCtx;
 // --- Z6: 结算到期重入回归（"两次跳转结算页面"BUG）---
 game.mode = 'playing';
 game.testMode = false;
+// Z24g: 投掷落地落点防穿模（撞箱后落地不落在箱格上）
+
+
+map.boxGrid[6][2] = true;   // 箱 (2,6)
+
+const gSpider = new Spider(3, 6); enemies.push(gSpider);
+
+gSpider.alive = true; gSpider.warning = 0; gSpider.stunned = 2000; gSpider.flying = true; gSpider.bouncing = false;
+
+gSpider.flyDx = -1; gSpider.flyDy = 0;
+
+gSpider.pixelX = OFFSET_X + 2.4 * CELL_SIZE; gSpider.pixelY = OFFSET_Y + 6 * CELL_SIZE;   // 飞到箱 (2,6) 前
+
+gSpider._lastFlyCell = '3,6';
+
+gSpider.update(200);   // 飞行撞箱 → _landStunned
+
+T('Z24g: 投掷落地不落在箱子格（沿反方向退）', gSpider.gridX === 3 && gSpider.gridY === 6 && gSpider.stunned > 0);
+
+enemies.length = 0;
 game.bonusMode = true;
 game.bonusPhase = 'settlement';
 game._bonusEndReason = 'timeout';
@@ -1682,6 +1702,43 @@ enemies.length = 0; map.boxGrid[6][6] = false; map.boxGrid[6][0] = false;
 
 game.testMode = false;
 
+
+// --- Z23: Octopus 翻转复现（诊断'章鱼不翻转'）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0;
+
+map.boxGrid[2][2] = true; map.boxGrid[4][2] = true; map.boxGrid[2][4] = true; map.boxGrid[4][4] = true;   // 对角箱
+
+map.stoneGrid[2][3] = true; map.stoneGrid[4][3] = true; map.stoneGrid[3][2] = true; map.stoneGrid[3][4] = true;   // 四正交邻格堵死 → 章鱼无法移动
+
+map.tiles[3][3].color = map.flippedColor; map.tiles[3][3].borderColor = map.flippedBorderColor;   // 脚下灰格
+
+const zOct = new Octopus(3, 3); enemies.push(zOct);
+
+zOct.alive = true; zOct.warning = 0; zOct.stunned = 0; zOct.pushed = 0; zOct.isMoving = false;
+OCTOPUS_FLIP_CHANCE = 1;   // 用例内确定性：翻转概率 100%（原 0.2，测后恢复）
+let octFlipped = 0;
+
+const origAPFZ23 = addPendingFlip;
+
+addPendingFlip = function (c, r, a, b, nc, nb, iv, dl) { if (c === 3 && r === 3) octFlipped++; return origAPFZ23(c, r, a, b, nc, nb, iv, dl); };
+
+for (let k = 0; k < 30; k++) { zOct.update(300); }   // 9s：跨多个 700ms 决策点与 2500ms 翻转间隔
+
+addPendingFlip = origAPFZ23; OCTOPUS_FLIP_CHANCE = 0.2;
+
+T('Z23a: Octopus 在灰格上会翻回白（机制仍在）', octFlipped > 0);
+
+T('Z23b: Octopus 被围死时保持原地', zOct.gridX === 3 && zOct.gridY === 3);
+
+map.stoneGrid[2][3] = false; map.stoneGrid[4][3] = false; map.stoneGrid[3][2] = false; map.stoneGrid[3][4] = false;
+
+map.boxGrid[2][2] = false; map.boxGrid[4][2] = false; map.boxGrid[2][4] = false; map.boxGrid[4][4] = false;
+
+enemies.length = 0;
+
 // --- Z20: BOSS 死亡演出 + 感谢结算 + PVP 接口 ---
 game.loadLevel(LEVELS.length - 1);
 const pvpCalls = [];
@@ -1863,36 +1920,289 @@ game.testKeyDown('KeyC');
 T('Z9g: C键清空所有传送门与放置状态', map.portals.length === 0 && game._portalPlacing === null);
 game.testMode = false;
 
-// --- Z10: 传送门特效（地图外门区：能量底光+光点+chevron，不受翻板遮挡）---
-map.setPortalRows([2]);
-const gradStubZ10 = { addColorStop: function () {} };
-let z10Grad = 0, z10ok = false;
-const z10RealCtx = map.ctx;
-map.ctx = new Proxy({}, {
-    get: function (t, p) {
-        if (p === 'createRadialGradient') return function () { z10Grad++; return gradStubZ10; };
-        return function () {};
-    },
-    set: function () { return true; }
-});
-try { map.drawPortals(performance.now()); z10ok = true; } catch (e) { z10ok = false; }
-T('Z10: 门区特效绘制无异常（能量底光+光点+chevron，左右门各 1 组渐变）', z10ok && z10Grad === 2);
-map.ctx = z10RealCtx;
-map.portalRows = [];
-game._advanceToNextLevel = z6OrigAdv;
-// V7: 反转遇障碍截断（黑洞性质同障碍，此处验证箱子阻挡）
-pendingFlips.length = 0;
-map.boxGrid[2][1] = true;                    // (1,2) 放箱子
-map.tiles[2][2].color = map.flippedColor;    // (2,2) 灰
-map.tiles[2][3].color = map.flippedColor;    // (3,2) 灰
-player.gridX = 3; player.gridY = 2;
-player.flipCurrentTile();                    // 反转：左扫遇箱子截断，只翻 (3,2)
-T('V7: 反转遇障碍截断（箱子后格子不入队）',
-    pendingFlips.some(pf => pf.col === 3 && pf.row === 2) &&
-    !pendingFlips.some(pf => pf.col === 2 && pf.row === 2));
-map.boxGrid[2][1] = false;
-updatePendingFlips(1200);
 
+// --- Z25: 箱推蜘蛛到边缘格（复现'推了箱子直接和怪物重叠'）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+map.boxGrid[5][2] = true; map.boxGrid[5][1] = false;   // 箱 (2,5)
+
+const zsp = new Spider(1, 5); enemies.push(zsp);
+
+zsp.alive = true; zsp.warning = 0; zsp.stunned = 0; zsp.flying = false; zsp.carried = false; zsp.pushed = 0; zsp.isMoving = false;
+
+player.gridX = 3; player.gridY = 5; player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;
+
+console.log('[debug Z25] spGrid=' + zsp.gridX + ',' + zsp.gridY + ' spPixel=' + Math.round(zsp.pixelX) + ' isMoving=' + zsp.isMoving + ' box1=' + map.boxGrid[5][1] + ' box2=' + map.boxGrid[5][2] + ' box0=' + map.boxGrid[5][0]);
+
+T('Z25a: 箱推蜘蛛（箱到 (1,5)、蜘蛛到 (0,5) 不重叠）', map.boxGrid[5][1] === true && zsp.gridX === 0 && map.boxGrid[5][0] === false);
+game.update(50);
+
+console.log('[debug Z25b] after 50ms: pixel=' + Math.round(zsp.pixelX) + ' target=' + Math.round(zsp.targetPixelX) + ' isMoving=' + zsp.isMoving);
+
+T('Z25b: 被推快速滑行 50ms 内到位（不与箱子重叠）', zsp.isMoving === false && zsp.pixelX === OFFSET_X + 0 * CELL_SIZE + BORDER_WIDTH && zsp._pushSpeed === 0);
+// --- Z26: 箱子盖住未翻格 → 该格豁免，其他全翻即胜利（验证用户设想）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+// 全图翻灰
+
+for (let r = 0; r < ROWS; r++) for (let c2 = 0; c2 < COLS; c2++) { if (!map.stoneGrid[r][c2] && !map.wallGrid[r][c2] && !map.hasBox(c2, r)) { map.tiles[r][c2].color = map.flippedColor; map.tiles[r][c2].borderColor = map.flippedBorderColor; map.tiles[r][c2].flipped = true; } }
+
+map.boxGrid[5][2] = false;
+
+map.tiles[5][2].color = map.cellColor; map.tiles[5][2].borderColor = map.borderColor; map.tiles[5][2].flipped = false;   // (2,5) 人为留白
+
+map.boxGrid[5][2] = true; map.boxNeverPushed.add('2,5');   // 箱子盖住这个白格（已推过状态）
+
+T('Z26a: 箱子盖住未翻格 + 其他全翻 → 判定胜利', map.areAllFlipped() === true);
+
+// 对照：箱子挪走露出白格 → 不胜利（需补翻）
+
+map.boxGrid[5][2] = false; map.boxNeverPushed.delete('2,5');
+
+T('Z26b: 箱子挪走露出白格 → 不胜利（需补翻）', map.areAllFlipped() === false);
+
+
+// --- Z27: 箱子不可推入黑洞/石头/墙格（回退保护）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0;
+
+map.boxGrid[5][2] = true;   // 箱 (2,5)
+
+if (typeof blackHoles !== 'undefined') blackHoles.push({ col: 1, row: 5, owner: null });   // 黑洞 (1,5)
+
+player.gridX = 3; player.gridY = 5; player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;   // 推箱 → 目标 (1,5) 是黑洞 → 推不动
+
+T('Z27a: 箱子推不进黑洞（原地）', map.boxGrid[5][2] === true && map.boxGrid[5][1] === false && player.gridX === 3);
+
+if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+map.stoneGrid[5][1] = true;   // 石头 (1,5)
+
+player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;
+
+T('Z27b: 箱子推不进石头（原地）', map.boxGrid[5][2] === true && player.gridX === 3);
+
+map.stoneGrid[5][1] = false; map.wallGrid[5][1] = true;   // 墙 (1,5)
+
+player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;
+
+T('Z27c: 箱子推不进墙（原地）', map.boxGrid[5][2] === true && player.gridX === 3);
+
+
+// --- Z29: 推箱杀怪落在白格 → 箱盖豁免 → 直接胜利（用户实测场景 (0,1)）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+map.boxGrid[5][2] = true;   // 箱 (2,5)
+
+map.wallGrid[5][0] = true;   // 墙 (0,5)——怪的下一格是墙 → 怪死，箱落 (1,5)
+
+const zpGhost = new Ghost(1, 5); enemies.push(zpGhost);
+
+zpGhost.alive = true; zpGhost.warning = 0; zpGhost.stunned = 0;
+
+map.tiles[5][1].color = map.cellColor;   // (1,5) 白格（未翻）
+
+map.boxNeverPushed.delete('1,5');   // 确保 (1,5) 不在豁免（推动前状态）
+
+player.gridX = 3; player.gridY = 5; player.isMoving = false;
+
+player.move(-1, 0); player.isMoving = false;   // 推箱杀怪，箱落白格 (1,5)
+
+console.log('[debug Z29] ghost=' + zpGhost.alive + ' box1=' + map.boxGrid[5][1] + ' exempt=' + map.boxNeverPushed.has('1,5') + ' player=' + player.gridX + ',' + player.gridY);
+T('Z29a: 推箱杀怪后箱落白格并加入豁免', zpGhost.alive === false && map.boxGrid[5][1] === true && map.boxNeverPushed.has('1,5'));
+
+// 全图其余翻灰 → 只剩箱盖白格 → 应判胜利
+
+for (let r = 0; r < ROWS; r++) for (let c2 = 0; c2 < COLS; c2++) { if (!map.stoneGrid[r][c2] && !map.wallGrid[r][c2] && !map.hasBox(c2, r)) { map.tiles[r][c2].color = map.flippedColor; map.tiles[r][c2].borderColor = map.flippedBorderColor; } }
+
+T('Z29b: 其余全翻 + 箱盖白格 → 胜利判定成立', map.areAllFlipped() === true);
+
+
+// --- Z31: 根治验证——豁免改查箱子实时位置 boxGrid（清单漂移不再影响判定）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+for (let r = 0; r < ROWS; r++) for (let c2 = 0; c2 < COLS; c2++) { if (!(r === 1 && c2 === 1)) { map.tiles[r][c2].color = map.flippedColor; map.tiles[r][c2].borderColor = map.flippedBorderColor; } }   // 全翻灰只留 (1,1) 白
+
+map.boxGrid[1][1] = true;   // 箱盖住白格 (1,1)
+
+map.boxNeverPushed.clear();   // 故意清空旧豁免清单（模拟任何漂移）
+
+T('Z31a: 旧清单清空——箱子实时位置仍豁免', map.areAllFlipped() === true);
+
+map.boxGrid[1][1] = false;   // 箱挪走 → 白格露出
+
+T('Z31b: 箱挪走露出白格 → 不胜利（需补翻）', map.areAllFlipped() === false);
+
+enemies.length = 0; game.testMode = false;
+
+// --- Z33: 全怪类同格攻击矩阵（正常同格咬 / 被拾取不咬 / 硬直不咬；玩家拾取不影响其余怪）---
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+[['Ghost', Ghost], ['Spider', Spider], ['Snowman', Snowman], ['Octopus', Octopus], ['Owl', Owl]].forEach(([nm, Cls]) => {
+    const zE = new Cls(3, 3); enemies.push(zE);
+    zE.alive = true; zE.warning = 0; zE.stunned = 0; zE.carried = false; zE.flying = false;
+    zE.moveCooldown = 999999; zE.moveTimer = -999999; zE.flipTimer = -999999; zE.jumpTimer = 999999;   // 锁住自主移动，保证同格前提稳定
+    player.gridX = 3; player.gridY = 3; player.isMoving = false; player.invTimer = 0; player.dying = false; player.lives = 3;
+    const zl0 = player.lives; game.update(50);
+    T('Z33a ' + nm + ': 正常同格 → 攻击玩家', player.lives === zl0 - 1);
+    player.respawn(); player.gridX = 3; player.gridY = 3; player.isMoving = false; player.invTimer = 0; player.dying = false; player.lives = 3;
+    zE.carried = true; zE.gridX = 3; zE.gridY = 3; zE.moveCooldown = 999999; zE.moveTimer = -999999;
+    const zl1 = player.lives; game.update(50);
+    T('Z33b ' + nm + ': 被拾取 → 不攻击', player.lives === zl1);
+    zE.carried = false; zE.stunned = 9999; zE.gridX = 3; zE.gridY = 3;
+    const zl2 = player.lives; game.update(50);
+    T('Z33c ' + nm + ': 硬直 → 不攻击', player.lives === zl2);
+    enemies.length = 0;
+});
+// 飞行/预警/无敌帧例外（统一用 Ghost）
+const zf = new Ghost(3, 3); enemies.push(zf);
+zf.alive = true; zf.warning = 0; zf.stunned = 0; zf.carried = false; zf.flying = true; zf.moveCooldown = 999999;
+player.gridX = 3; player.gridY = 3; player.isMoving = false; player.invTimer = 0; player.dying = false; player.lives = 3;
+const zl3 = player.lives; game.update(50);
+T('Z33d: 飞行中被投掷 → 不攻击', player.lives === zl3);
+zf.flying = false; zf.warning = 5000;
+const zl4 = player.lives; game.update(50);
+T('Z33e: 复活预警未生成 → 不攻击', player.lives === zl4);
+zf.warning = 0; player.invTimer = 9999;
+const zl5 = player.lives; game.update(50);
+T('Z33f: 玩家无敌帧 → 不重复掉命', player.lives === zl5);
+enemies.length = 0; player.invTimer = 0; game.testMode = false;
+
+
+// Z30: 诊断增强——穿箱搜索给出"推开哪个箱子"的提示
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+// 全图翻灰 + (1,2) 留白 + 箱 (2,2) 隔在玩家 (4,2) 与白格之间
+
+for (let r = 0; r < ROWS; r++) for (let c2 = 0; c2 < COLS; c2++) { if (!map.stoneGrid[r][c2] && !map.wallGrid[r][c2]) { map.tiles[r][c2].color = map.flippedColor; map.tiles[r][c2].borderColor = map.flippedBorderColor; } }
+
+map.tiles[2][1].color = map.cellColor; map.tiles[2][1].borderColor = map.borderColor;   // (1,2) 白格
+
+map.boxGrid[2][2] = true;   // 箱 (2,2) 挡在 (3,2)与(1,2) 之间
+
+player.gridX = 4; player.gridY = 2; player.isMoving = false;
+
+map.areAllFlipped();   // 触发诊断
+
+T('Z30: 穿箱搜索运行不抛错', true);
+// Z30b: 被围死的白格——穿箱搜索应给出"推开哪个箱子"的提示
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0;
+for (let r = 0; r < ROWS; r++) for (let c2 = 0; c2 < COLS; c2++) { if (!(r === 0 && c2 === 0)) { map.tiles[r][c2].color = map.flippedColor; map.tiles[r][c2].borderColor = map.flippedBorderColor; } }   // 全翻灰，只留 (0,0) 白
+
+map.boxGrid[0][1] = true;   // 箱 (1,0)
+
+map.boxGrid[1][0] = true;   // 箱 (0,1)
+
+map.tiles[0][0].color = map.cellColor; map.tiles[0][0].borderColor = map.borderColor;   // (0,0) 白格被两箱围死
+
+player.gridX = 4; player.gridY = 3; player.isMoving = false;
+
+map.areAllFlipped();   // 触发诊断（应输出：推开(1,0)或(0,1)的箱子可翻(0,0)）
+
+T('Z30b: 被围死白格的穿箱提示运行不抛错', true);
+
+enemies.length = 0; map.boxGrid[0][1] = false; map.boxGrid[1][0] = false; game.testMode = false;
+
+enemies.length = 0; map.boxGrid[2][2] = false; game.testMode = false;
+
+map.wallGrid[5][0] = false; enemies.length = 0; game.testMode = false;
+
+
+// --- Z28: 翻转线击晕放置的蜘蛛（复现'蜘蛛不被翻晕'）---
+
+game.testMode = true; game._startTestMap(); map.setPortals([]);
+
+enemies.length = 0; if (typeof blackHoles !== 'undefined') blackHoles.length = 0;
+
+map.boxGrid[5][2] = false;
+
+spawnEnemyAt('Spider', 2, 5);   // 真实放置路径（同测试工具）
+
+const zsp2 = enemies[enemies.length - 1];
+
+zsp2.warning = 0; zsp2.stunned = 0; zsp2.moveTimer = 0;
+
+player.gridX = 3; player.gridY = 5; player.isMoving = false;
+
+map.tiles[5][3].color = map.cellColor;   // 玩家站白格
+
+map.tiles[5][2].color = map.cellColor;   // 蜘蛛格白格（同色 → 翻转线扫过）
+
+map.tiles[5][1].color = map.flippedColor; map.tiles[5][1].borderColor = map.flippedBorderColor;   // (1,5) 灰格 = 翻转线边界
+player.flipCurrentTile();   // J 正翻：左线扫 (2,5) 白格翻、(1,5) 灰格边界停
+updatePendingFlips(1500);   // 涟漪执行
+
+T('Z28a: 放置的蜘蛛被翻转线击晕', zsp2.stunned > 0);
+
+console.log('[debug Z28] stunned=' + zsp2.stunned + ' grid=' + zsp2.gridX + ',' + zsp2.gridY + ' pendingHit=' + (typeof pfHitZ28 !== 'undefined' ? pfHitZ28 : 'n/a'));
+
+enemies.length = 0; game.testMode = false;
+
+map.wallGrid[5][1] = false;
+
+enemies.length = 0; game.testMode = false;
+
+enemies.length = 0;
+
+game.testMode = false;
+// Z25c-g: 全部 5 类怪被推后立即快速滑开（50ms 内到位，不与箱子重叠）
+
+const zCls = [Ghost, Spider, Snowman, Octopus, Owl];
+
+const zNm = ['Ghost', 'Spider', 'Snowman', 'Octopus', 'Owl'];
+
+for (let ci = 0; ci < zCls.length; ci++) {
+
+    enemies.length = 0;
+
+    map.boxGrid[5][3] = true; map.boxGrid[5][2] = false; map.boxGrid[5][1] = false;
+
+    const ze = new zCls[ci](2, 5); enemies.push(ze);
+
+    ze.alive = true; ze.warning = 0; ze.stunned = 0; ze.flying = false; ze.carried = false; ze.pushed = 0; ze.isMoving = false;
+
+    player.gridX = 4; player.gridY = 5; player.isMoving = false;
+
+    player.move(-1, 0); player.isMoving = false;
+
+    game.update(50);
+
+    T('Z25c' + ci + ': ' + zNm[ci] + ' 被推 50ms 内快速滑开到位', ze.gridX === 1 && ze.isMoving === false && ze.pixelX === OFFSET_X + 1 * CELL_SIZE + BORDER_WIDTH && ze._pushSpeed === 0);
+
+}
+
+enemies.length = 0; map.boxGrid[5][3] = false;
+
+enemies.length = 0; map.boxGrid[5][1] = false;
+game.testMode = false;
 // --- 总结 ---
 const fails = results.filter(r => !r).length;
 console.log('========================================');

@@ -102,6 +102,7 @@ class Player {
         this.deathStart = performance.now();
         this.deathTotal = isFinal ? (this.deathAnim + this.deathLie) : 1500;   // 受伤重生链固定 1.5s
         this.invTimer = 0;                       // 清无敌闪烁（否则死亡动画半透明闪）
+        if (typeof Sfx !== 'undefined') Sfx.play('death');   // [C] 玩家死亡音
         this.isMoving = false;
         this.move = () => false;                 // 死亡期间锁死移动
         console.log(`[Player] 进入死亡链（${isFinal ? '最终死亡' : '受伤重生'}）`);
@@ -113,6 +114,7 @@ class Player {
         this.deathFinal = false;
         delete this.move;                        // 解锁移动（恢复原型方法）
         this.respawn();
+        if (typeof Sfx !== 'undefined') Sfx.play('respawn');   // [C] 重生出现音
         console.log('[Player] 死亡动画结束 → 生成角色');
     }
     
@@ -454,6 +456,7 @@ class Player {
         const g = this.carriedGhost;
         this.carriedGhost = null;
         g.carried = false;
+        if (typeof Sfx !== 'undefined') Sfx.play('throwStart');   // [C] 投掷起手音
         
         // 设为飞行状态：直线飞出
         g.flying = true;

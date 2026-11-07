@@ -554,7 +554,7 @@ class Game {
     togglePause() {
         if (this.mode === 'menu') return;   // 菜单无暂停
         this.paused = !this.paused;
-        this._pauseCursor = 0;
+        if (typeof Sfx !== 'undefined') Sfx.play('paused' ? 'pause' : 'resume');   // [C] 暂停/继续音
         this._pausePage = 'menu';
         console.log('[Game] 暂停：' + (this.paused ? '开' : '关'));
     }
@@ -695,6 +695,11 @@ class Game {
             // 倒计时（测试地图/BOSS 关卡走各自计时，普通关卡通用倒计时）
             if (this.timeLeft > 0 && !this.testMode && !this.bossMode) {
                 this.timeLeft = Math.max(0, this.timeLeft - dt);
+                // 最后 10 秒滴答警告（每秒一声，秒数变化才响）
+                if (this.timeLeft <= 10000) {
+                    const sec = Math.ceil(this.timeLeft / 1000);
+                    if (this._lastTickSec !== sec) { this._lastTickSec = sec; if (typeof Sfx !== 'undefined') Sfx.play('tick'); }
+                }
                 if (this.timeLeft <= 0) {
                     this.gameOver = true;
         if (typeof Sfx !== 'undefined') Sfx.play('gameover');   // [C] 失败音效
@@ -710,12 +715,19 @@ class Game {
             if (typeof updateBursts === 'function') updateBursts(dt);
             // 更新所有敌人
             enemies.forEach(e => e.update(dt));
+            // [C] 统一同格碰撞攻击：所有怪物类型与玩家同格即攻击（玩家走进怪格 / 怪追到玩家格 / 被推到玩家格）
+            // 排除：被拾取中（驯服不攻击）、硬直中（不攻击）、飞行中被投掷、复活预警未生成；节流靠 _hitPlayer 内的无敌帧
+            enemies.forEach(e => {
+                if (e && e.alive && !e.carried && !(e.stunned > 0) && !e.flying && !(e.warning > 0) &&
+                    player && !player.isDead() &&
+                    e.gridX === player.gridX && e.gridY === player.gridY) e._hitPlayer();
+            });
         if (typeof bossKing !== 'undefined' && bossKing) {
             bossKing.update(dt);   // [Boss] BOSS 更新（测试地图召唤 / BOSS 关卡通用）
             // BOSS 死亡演出与胜利判定（hp 由投掷小怪命中结算）
             if (bossKing.hp <= 0 && bossKing.state !== 'dying' && bossKing.state !== 'dead') {
                 bossKing.state = 'dying';   // 死亡演出（death 素材 1.2s 帧序）
-                if (typeof Sfx !== 'undefined') Sfx.play('gameover');
+                if (typeof Sfx !== 'undefined') Sfx.play('bossDefeat');   // [C] BOSS 击败：胜利琶音（原误播失败音）
                 console.log('[Boss] 幽灵王被击败！');
             }
             if (bossKing.state === 'dead' && this.bossMode && !this._bossVictory) {
@@ -808,6 +820,7 @@ class Game {
         this.gameOver = false;
         player.lives = 1;                     // 恢复 1 命
         player._revive();                     // 解锁移动 + 重生点落位 + 无敌帧（复用受伤重生链）
+        if (typeof Sfx !== 'undefined') Sfx.play('revive');   // [C] 复活音
         gameInput.enabled = true;
         if (this.timeLeft <= 0) this.timeLeft = 30000;   // 时间到死亡的复活缓冲
         if (typeof spawnFloatText === 'function') {
@@ -825,6 +838,7 @@ class Game {
             () => {
                 this._adDoubleUsed = true;
                 this.addScore(this._lastRoundScore);   // 复用加分（自动更新 HI-SCORE）
+                if (typeof Sfx !== 'undefined') Sfx.play('revive');   // [C] 双倍奖励音
                 console.log(`[Ad] 双倍奖励：+${this._lastRoundScore}`);
             },
             (ok) => { if (!ok) console.log('[Ad] 双倍广告未完成'); });

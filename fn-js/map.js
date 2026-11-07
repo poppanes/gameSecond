@@ -268,17 +268,27 @@ class Map {
             console.log(`[pushBox] → 碰到边界，推不动`);
             return false;
         }
+
+        // 目标格是黑洞/石头/墙 → 箱子推不入（黑洞不吞箱子、箱子不可嵌入障碍格）
+        const tHole = typeof isBlackHole === 'function' && isBlackHole(newCol, newRow);
+        const tStone = this.stoneGrid[newRow][newCol];
+        const tWall = this.wallGrid[newRow][newCol] || this.tiles[newRow][newCol].type === 'wall' || this.tiles[newRow][newCol].type === 'obstacle';
+        if (tHole || tStone || tWall) {
+            console.log(`[pushBox] → 目标格是${tHole ? '黑洞' : (tStone ? '石头' : '墙')}，推不动`);
+            return false;
+        }
         
         // 条件A：推到的格子上有另一个箱子 → 当前箱子消失 → 掉落道具 → 玩家不前进
         if (this.boxGrid[newRow][newCol]) {
             console.log(`[pushBox] → 撞到另一个箱子，当前箱子消失，玩家不移动`);
             this.boxGrid[boxRow][boxCol] = false;
             spawnItem(boxCol, boxRow);
+            if (typeof Sfx !== 'undefined') Sfx.play('boxBreak');   // 箱子撞毁
             return 'destroyed';
         }
         
-        // 条件C：目标位置有怪物（硬直中不算）
-        const enemiesOnCell = enemies.filter(e => e && e.alive === true && e.stunned <= 0 &&
+        // 条件C：目标位置有怪物（硬直中也算占格——可被推走；飞行/被玩家举着的怪不参与地面推动）
+        const enemiesOnCell = enemies.filter(e => e && e.alive === true && !e.carried && !e.flying &&
             e.gridX === newCol && e.gridY === newRow);
         if (enemiesOnCell.length > 0) {
             const eNextCol = newCol + dx;
@@ -299,8 +309,10 @@ class Map {
                     console.log(`[pushBox] → 推到角落(${newCol},${newRow})，箱子消失`);
                 } else {
                     this.boxGrid[newRow][newCol] = true;
+                    this.boxNeverPushed.add(`${newCol},${newRow}`);   // 箱盖白格豁免（其他全翻即胜利）
                 }
-                enemiesOnCell.forEach(e => { e.alive = false; });
+                enemiesOnCell.forEach(e => { e.alive = false; });   // 目标格怪物全部被挤死
+                if (typeof Sfx !== 'undefined') { Sfx.play('pushBox'); Sfx.play('death'); }   // 推箱+怪物出图
                 console.log(`[pushBox] → 箱子把 [${enemiesOnCell.map(e=>e.name).join(',')}] 共${enemiesOnCell.length}只怪物推出地图外`);
                 return true;
             }
@@ -325,13 +337,18 @@ class Map {
                         this.boxGrid[newRow][newCol] = false;
                         spawnItem(newCol, newRow, true);
                         console.log(`[pushBox] → 推到角落(${newCol},${newRow})，箱子消失`);
+                    } else {
+                        this.boxNeverPushed.add(`${newCol},${newRow}`);   // 箱留边缘格：盖住的白格豁免
                     }
-                    console.log(`[pushBox] → 全部 ${enemiesOnCell.length} 只怪物一起被推出地图外`);
-                    return true;
+                if (typeof Sfx !== 'undefined') { Sfx.play('pushBox'); Sfx.play('death'); }   // 推箱+怪物出图
+                console.log(`[pushBox] → 全部 ${enemiesOnCell.length} 只怪物一起被推出地图外`);
+                return true;
                 }
 
                 // 推该格全部堆叠怪（堆叠整体移动——叠到下一格继续叠加；后续格的怪不动，等箱子追上）
                 enemiesOnCell.forEach(e => { e.pushTo(eNextCol, eNextRow); });
+                this.boxNeverPushed.add(`${newCol},${newRow}`);   // 箱盖白格豁免（其他全翻即胜利）
+                if (typeof Sfx !== 'undefined') Sfx.play('pushBox');   // 推箱音效
                 console.log(`[pushBox] → 箱子推动 ${enemiesOnCell.length} 只堆叠怪 (${newCol},${newRow}) → (${eNextCol},${eNextRow})`);
                 return true;
             }
@@ -542,7 +559,24 @@ class Map {
         });
     }
     
-    // 检查所有格子是否都已翻转（石头格、未推动箱子格不纳入判定）
+    // 收尾模式：剩余白格 ≤ 3 时怪物停止翻回白（防末期"玩家翻灰、怪物翻回白"拉锯导致无法收尾结算）
+    isEndgame() {
+        if (!this._endgameCheckAt || performance.now() - this._endgameCheckAt > 500) {
+            this._endgameCheckAt = performance.now();
+            let white = 0;
+            for (let row = 0; row < this.rows && white <= 3; row++) {
+                for (let col = 0; col < this.cols && white <= 3; col++) {
+                    if (this.stoneGrid[row][col] || this.wallGrid[row][col] || this.boxNeverPushed.has(`${col},${row}`)) continue;
+                    if (typeof isBlackHole === 'function' && isBlackHole(col, row)) continue;
+                    if (this.tiles[row][col].color === this.cellColor) white++;
+                }
+            }
+            this._endgameWhite = white;
+        }
+        return this._endgameWhite > 0 && this._endgameWhite <= 3;
+    }
+
+    // 检查所有格子是否都已翻转（石头格、箱子所在格不纳入判定——箱子当前盖在哪，哪就豁免）
     areAllFlipped() {
         const unflipped = [];
         const exempt = [];  // 豁免的格子
@@ -550,7 +584,7 @@ class Map {
             for (let col = 0; col < this.cols; col++) {
                 if (this.stoneGrid[row][col]) { exempt.push(`stone(${col},${row})`); continue; }
                 if (this.wallGrid[row][col]) { exempt.push(`wall(${col},${row})`); continue; }
-                if (this.boxNeverPushed.has(`${col},${row}`)) { exempt.push(`box(${col},${row})`); continue; }
+                if (this.boxGrid[row][col]) { exempt.push(`box(${col},${row})`); continue; }   // 箱子实时位置直查（根治豁免清单漂移）
                 // 黑洞格豁免（无法翻转）
                 if (typeof isBlackHole === 'function' && isBlackHole(col, row)) { exempt.push(`hole(${col},${row})`); continue; }
                 // 用颜色判断，避免 flipped/color 不同步
@@ -558,6 +592,62 @@ class Map {
                 if (tile.color === this.cellColor) {
                     unflipped.push(`(${col},${row})`);
                 }
+            }
+        }
+        // [诊断] 临近通关时（剩 ≤3 白格）节流输出剩余白格+玩家位置+可达性——定位"翻不到/无法结算"类问题（1s 一次防刷屏）
+        if (unflipped.length > 0 && unflipped.length <= 3 && typeof player !== 'undefined' && player) {
+            const now = performance.now();
+            if (!this._unflipLogAt || now - this._unflipLogAt > 1000) {
+                this._unflipLogAt = now;
+                // BFS 可达性（障碍=箱子/石头/墙/黑洞）——找出玩家走不到的白格（被推箱堵死 → 死锁）
+                const passable = (c, r) => !(this.boxGrid[r] && this.boxGrid[r][c]) && !(this.stoneGrid[r] && this.stoneGrid[r][c]) && !(this.wallGrid[r] && this.wallGrid[r][c]) && !(typeof isBlackHole === 'function' && isBlackHole(c, r));
+                const reach = new Set([player.gridX + ',' + player.gridY]);
+                const queue = [[player.gridX, player.gridY]];
+                while (queue.length > 0) {
+                    const [cx, cy] = queue.shift();
+                    [[0,-1],[0,1],[-1,0],[1,0]].forEach(([dx, dy]) => {
+                        const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
+                        if (nx >= 0 && nx < this.cols && ny >= 0 && ny < this.rows && !reach.has(key) && passable(nx, ny)) { reach.add(key); queue.push([nx, ny]); }
+                    });
+                }
+                const stuck = unflipped.filter(u => !reach.has(u.replace(/[()]/g, '')));
+                let stuckTip = '';
+                if (stuck.length > 0) {
+                    // 穿箱搜索：从所有可达格出发，允许路径穿越 1 个箱子（推走即可通行；石/墙/黑洞不可穿越）
+                    // → 直接给出"推开哪个箱子就能翻哪个白格"
+                    const via = {};   // 白格 key → 挡路箱坐标（用普通对象，兼容验证 mock 环境）
+                    const seen = new Set();
+                    const q2 = [];
+                    reach.forEach(k => { q2.push([k, 0, null]); seen.add(k + '|0'); });
+                    const stuckKeys = stuck.map(u => u.replace(/[()]/g, ''));
+                    while (q2.length > 0) {
+                        const cell = q2.shift();
+                        const pp = cell[0].split(',');
+                        const cx = +pp[0], cy = +pp[1];
+                        for (const dr of [[0,-1],[0,1],[-1,0],[1,0]]) {
+                            const nx = cx + dr[0], ny = cy + dr[1];
+                            if (nx < 0 || nx >= this.cols || ny < 0 || ny >= this.rows) continue;
+                            const nk = nx + ',' + ny;
+                            const isBox = !!(this.boxGrid[ny] && this.boxGrid[ny][nx]);
+                            const isHard = !!(this.stoneGrid[ny] && this.stoneGrid[ny][nx]) || !!(this.wallGrid[ny] && this.wallGrid[ny][nx]) || (typeof isBlackHole === 'function' && isBlackHole(nx, ny));
+                            if (isHard) continue;   // 石/墙/黑洞推不走，不可穿越
+                            const nUsed = cell[1] || (isBox ? 1 : 0);
+                            if (nUsed > 1) continue;
+                            const sk = nk + '|' + nUsed;
+                            const nBoxAt = isBox && !cell[1] ? nk : cell[2];
+                            if (!seen.has(sk)) { seen.add(sk); q2.push([nk, nUsed, nBoxAt]); }
+                            if (nUsed === 1 && stuckKeys.indexOf(nk) >= 0 && via[nk] === undefined) via[nk] = nBoxAt;
+                        }
+                    }
+                    stuckTip = ' | ⚠ 不可达: ' + stuck.join(' ');
+                    const tips = [];
+                    stuck.forEach(u => {
+                        const k = u.replace(/[()]/g, '');
+                        tips.push(via[k] !== undefined ? ('推开(' + via[k] + ')的箱子可翻' + u) : (u + ' 需绕路或推多箱'));
+                    });
+                    stuckTip += ' → ' + tips.join('；');
+                }
+                console.log(`[Level][诊断] 剩余白格 ${unflipped.length} 格: ${unflipped.join(' ')} | 玩家 (${player.gridX},${player.gridY}) | 豁免 ${exempt.length} 格${stuckTip}`);
             }
         }
         if (exempt.length > 0) {

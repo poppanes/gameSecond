@@ -332,6 +332,7 @@ class BossKing {
     takeDamage(amount) {
         if (this.state !== 'active') return false;
         this.hp = Math.max(0, this.hp - amount);
+        if (typeof Sfx !== 'undefined') Sfx.play('bossHurt');   // [C] BOSS 受击音
         if (this.hp <= 0) { this.state = 'dying'; return true; }
         this.state = 'hurt';
         this.hurtTimer = BOSS_CONFIG.hurtFlashMs;

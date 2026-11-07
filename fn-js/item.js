@@ -135,6 +135,7 @@ class Item {
                 }
                 break;
             case 'hammer':
+                if (typeof Sfx !== 'undefined') Sfx.play('hammer');   // [C] 铁锤使用音
                 // 铁锤：所有怪物进入硬直状态（不立即死亡）；重生闪烁预警中的怪物无敌豁免
                 if (typeof enemies !== 'undefined') {
                     enemies.forEach(e => {
@@ -165,6 +166,7 @@ class Item {
                     console.log('[Item] 拾取怪物中，翻转卡不触发');
                     break;
                 }
+                if (typeof Sfx !== 'undefined') Sfx.play('flipCard');   // [C] 翻转卡使用音
                 // 翻转卡：flip1=相邻两行整行横翻；flip2=相邻3列整列纵翻
                 // 优先级：靠近已翻转格的白格先翻（涟漪从已有灰色区域向外蔓延），无已翻转格时以玩家位置为起点
                 if (player && map) {
@@ -217,6 +219,7 @@ class Item {
                 }
                 break;
             case 'snow':
+                if (typeof Sfx !== 'undefined') Sfx.play('snow');   // [C] 雪花冰冻音
                 // 雪花：全体怪物冰冻 8s（铁锤 4s 的强化版）；重生闪烁预警中的怪物无敌豁免
                 if (typeof enemies !== 'undefined') {
                     enemies.forEach(e => {
